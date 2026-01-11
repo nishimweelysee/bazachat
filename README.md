@@ -115,3 +115,5 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Auto zone capacity**: set a zone to auto mode so capacity stays synced when the polygon changes.
 - **Summary breakdown**: per-section totals (sellable/blocked/kill + standing capacity) for the active config.
 - **Breakdown table**: switch between sections/levels, filter, and sort.
+- **Click-to-zoom**: clicking a breakdown row zooms the canvas to that section/level.
+- **Pagination**: breakdown table supports paging and adjustable page size.

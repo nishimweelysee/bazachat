@@ -442,6 +442,8 @@ function App() {
   const [breakdownView, setBreakdownView] = useState<'sections' | 'levels'>('sections')
   const [breakdownFilter, setBreakdownFilter] = useState('')
   const [breakdownSort, setBreakdownSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
+  const [breakdownPage, setBreakdownPage] = useState(1)
+  const [breakdownPageSize, setBreakdownPageSize] = useState(30)
 
   useEffect(() => {
     if (!zoneInfo) return
@@ -488,6 +490,72 @@ function App() {
       return dir * (getNum(a, key) - getNum(b, key))
     })
   }, [breakdownQ.data, breakdownView, breakdownFilter, breakdownSort])
+
+  const breakdownTotalPages = Math.max(1, Math.ceil(breakdownRows.length / Math.max(1, breakdownPageSize)))
+  const breakdownPageRows = breakdownRows.slice(
+    (Math.max(1, breakdownPage) - 1) * Math.max(1, breakdownPageSize),
+    (Math.max(1, breakdownPage) - 1) * Math.max(1, breakdownPageSize) + Math.max(1, breakdownPageSize),
+  )
+
+  useEffect(() => {
+    // reset pagination when switching view/filter/sort
+    setBreakdownPage(1)
+  }, [breakdownView, breakdownFilter, breakdownSort])
+
+  function boundsFromPoints(pts: Array<[number, number]>): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (!pts.length) return null
+    let minX = pts[0]![0]
+    let minY = pts[0]![1]
+    let maxX = pts[0]![0]
+    let maxY = pts[0]![1]
+    for (const [x, y] of pts) {
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+    return { minX, minY, maxX, maxY }
+  }
+
+  function zoomToBounds(b: { minX: number; minY: number; maxX: number; maxY: number }) {
+    const vw = Math.max(300, stageW)
+    const vh = Math.max(300, stageH)
+    const pad = 40 // pixels
+    const w = Math.max(1e-6, b.maxX - b.minX)
+    const h = Math.max(1e-6, b.maxY - b.minY)
+    const nextScale = Math.min((vw - pad) / w, (vh - pad) / h)
+    const cx = (b.minX + b.maxX) / 2
+    const cy = (b.minY + b.maxY) / 2
+    setScale(nextScale)
+    setPan({ x: vw / 2 - cx * nextScale, y: vh / 2 - cy * nextScale })
+  }
+
+  function zoomToSection(sectionId: Id) {
+    const sec = sections.find((s) => (s.id as Id) === sectionId)
+    if (!sec) return
+    try {
+      const pts = JSON.parse(sec.geom_json as string) as Array<[number, number]>
+      const b = boundsFromPoints(pts)
+      if (b) zoomToBounds(b)
+    } catch {
+      // ignore
+    }
+  }
+
+  function zoomToLevel(levelId: Id) {
+    const secs = sections.filter((s) => (s.level_id as Id) === levelId)
+    const allPts: Array<[number, number]> = []
+    for (const s of secs) {
+      try {
+        const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
+        allPts.push(...pts)
+      } catch {
+        // ignore
+      }
+    }
+    const b = boundsFromPoints(allPts)
+    if (b) zoomToBounds(b)
+  }
 
   const hoverSeatInfo = useMemo(() => {
     if (!hoverSeatId) return null
@@ -1108,6 +1176,22 @@ function App() {
           <Button variant="light" disabled={!venueId} onClick={() => exportBreakdownCsvM.mutate()}>
             Export breakdown CSV
           </Button>
+          <Group grow>
+            <NumberInput
+              label="Page"
+              value={breakdownPage}
+              onChange={(v) => setBreakdownPage(Math.max(1, Math.min(breakdownTotalPages, Number(v ?? 1))))}
+              min={1}
+              max={breakdownTotalPages}
+            />
+            <NumberInput
+              label="Page size"
+              value={breakdownPageSize}
+              onChange={(v) => setBreakdownPageSize(Math.max(5, Math.min(200, Number(v ?? 30))))}
+              min={5}
+              max={200}
+            />
+          </Group>
           {breakdownQ.data ? (
             <Table withColumnBorders withRowBorders={false} striped highlightOnHover>
               <Table.Thead>
@@ -1145,7 +1229,7 @@ function App() {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {breakdownRows.slice(0, 30).map((r: any, i: number) => {
+                {breakdownPageRows.map((r: any, i: number) => {
                   const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
                   return (
                     <Table.Tr
@@ -1156,10 +1240,12 @@ function App() {
                           setActiveLevelId(r.level_id as Id)
                           setActiveSectionId(r.section_id as Id)
                           setActiveRowId(null)
+                          zoomToSection(r.section_id as Id)
                         } else {
                           setActiveLevelId(r.level_id as Id)
                           setActiveSectionId(null)
                           setActiveRowId(null)
+                          zoomToLevel(r.level_id as Id)
                         }
                       }}
                     >
@@ -1178,9 +1264,9 @@ function App() {
               —
             </Text>
           )}
-          {breakdownRows.length > 30 && (
+          {breakdownRows.length > breakdownPageSize && (
             <Text size="sm" c="dimmed">
-              Showing first 30 rows (filter to narrow).
+              Showing page {breakdownPage} of {breakdownTotalPages} ({breakdownRows.length} rows).
             </Text>
           )}
 
