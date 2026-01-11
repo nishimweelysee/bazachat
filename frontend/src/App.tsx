@@ -53,7 +53,7 @@ import {
   type Id,
   type PathSeg,
 } from './api'
-import { arcFrom3Points, closestPointOnSegment, pointOnArc, type Pt } from './geometry'
+import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonSelfIntersection, type Pt } from './geometry'
 import { polygonArea } from './geometry'
 import { TopBar } from './components/TopBar'
 import { Sidebar } from './components/Sidebar'
@@ -398,6 +398,33 @@ function App() {
     const pts = JSON.parse(g) as Array<[number, number]>
     return pts
   }, [data])
+
+  const draftPolyPts = useMemo(() => draftPts.map((p) => [p.x, p.y] as [number, number]), [draftPts])
+  const draftZonePolyPts = useMemo(() => draftZonePts.map((p) => [p.x, p.y] as [number, number]), [draftZonePts])
+
+  const draftPolygonIntersection = useMemo(() => {
+    if (!(tool === 'draw-pitch' || tool === 'draw-section')) return null
+    if (draftPolyPts.length < 4) return null
+    return polygonSelfIntersection(draftPolyPts)
+  }, [tool, draftPolyPts])
+
+  const draftZoneIntersection = useMemo(() => {
+    if (tool !== 'draw-zone') return null
+    if (draftZonePolyPts.length < 4) return null
+    return polygonSelfIntersection(draftZonePolyPts)
+  }, [tool, draftZonePolyPts])
+
+  const draftPolygonInvalid = useMemo(() => {
+    if (!(tool === 'draw-pitch' || tool === 'draw-section')) return false
+    if (draftPolyPts.length >= 3 && polygonArea(draftPolyPts) <= 1e-6) return true
+    return Boolean(draftPolygonIntersection)
+  }, [tool, draftPolyPts, draftPolygonIntersection])
+
+  const draftZoneInvalid = useMemo(() => {
+    if (tool !== 'draw-zone') return false
+    if (draftZonePolyPts.length >= 3 && polygonArea(draftZonePolyPts) <= 1e-6) return true
+    return Boolean(draftZoneIntersection)
+  }, [tool, draftZonePolyPts, draftZoneIntersection])
 
   const overrideBySeatId = useMemo(() => new Map(overrides.map((o) => [o.seat_id as Id, o])), [overrides])
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id as Id, r])), [rows])
@@ -772,17 +799,54 @@ function App() {
   function finishDrawing() {
     if (tool === 'draw-pitch') {
       if (draftPts.length >= 3) {
+        if (draftPolygonIntersection) {
+          notifications.show({
+            color: 'red',
+            message: `Pitch polygon self-intersects near (${draftPolygonIntersection[0].toFixed(2)}, ${draftPolygonIntersection[1].toFixed(2)}). Undo last point (Ctrl/Cmd+Z) or adjust points.`,
+          })
+          return
+        }
+        if (polygonArea(draftPolyPts) <= 1e-6) {
+          notifications.show({ color: 'red', message: 'Pitch polygon area is ~0. Adjust points and try again.' })
+          return
+        }
         upsertPitchM.mutate(draftPts.map((p) => [p.x, p.y]))
         setDraftPts([])
       }
       return
     }
     if (tool === 'draw-section') {
-      if (draftPts.length >= 3) setCreateSectionOpen(true)
+      if (draftPts.length >= 3) {
+        if (draftPolygonIntersection) {
+          notifications.show({
+            color: 'red',
+            message: `Section polygon self-intersects near (${draftPolygonIntersection[0].toFixed(2)}, ${draftPolygonIntersection[1].toFixed(2)}). Undo last point (Ctrl/Cmd+Z) or adjust points.`,
+          })
+          return
+        }
+        if (polygonArea(draftPolyPts) <= 1e-6) {
+          notifications.show({ color: 'red', message: 'Section polygon area is ~0. Adjust points and try again.' })
+          return
+        }
+        setCreateSectionOpen(true)
+      }
       return
     }
     if (tool === 'draw-zone') {
-      if (draftZonePts.length >= 3) setCreateZoneOpen(true)
+      if (draftZonePts.length >= 3) {
+        if (draftZoneIntersection) {
+          notifications.show({
+            color: 'red',
+            message: `Zone polygon self-intersects near (${draftZoneIntersection[0].toFixed(2)}, ${draftZoneIntersection[1].toFixed(2)}). Undo last point (Ctrl/Cmd+Z) or adjust points.`,
+          })
+          return
+        }
+        if (polygonArea(draftZonePolyPts) <= 1e-6) {
+          notifications.show({ color: 'red', message: 'Zone polygon area is ~0. Adjust points and try again.' })
+          return
+        }
+        setCreateZoneOpen(true)
+      }
       return
     }
     if (tool === 'draw-row-line') {
@@ -1812,6 +1876,8 @@ function App() {
             draftRowPts={draftRowPts}
             draftArcPts={draftArcPts}
             cursorWorld={cursorWorld}
+            draftPolygonInvalid={draftPolygonInvalid}
+            draftZoneInvalid={draftZoneInvalid}
             sections={sections}
             zones={zones}
             rows={rows}

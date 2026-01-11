@@ -62,6 +62,8 @@ export function CanvasView(props: {
   draftRowPts: Array<{ x: number; y: number }>
   draftArcPts: Array<{ x: number; y: number }>
   cursorWorld: { x: number; y: number } | null
+  draftPolygonInvalid: boolean
+  draftZoneInvalid: boolean
 
   sections: any[]
   zones: any[]
@@ -191,7 +193,7 @@ export function CanvasView(props: {
               points={toPoints(
                 props.cursorWorld ? [...props.draftPts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]] : props.draftPts.map((p) => [p.x, p.y]),
               )}
-              stroke="#a78bfa"
+              stroke={props.draftPolygonInvalid ? '#fb7185' : '#a78bfa'}
               strokeWidth={2}
               dash={dash}
               lineCap="round"
@@ -201,7 +203,7 @@ export function CanvasView(props: {
           {(props.tool === 'draw-pitch' || props.tool === 'draw-section') && props.cursorWorld && props.draftPts.length >= 2 && (
             <Line
               points={[props.draftPts[0]!.x, props.draftPts[0]!.y, props.cursorWorld.x, props.cursorWorld.y]}
-              stroke="rgba(167, 139, 250, 0.55)"
+              stroke={props.draftPolygonInvalid ? 'rgba(251, 113, 133, 0.7)' : 'rgba(167, 139, 250, 0.55)'}
               strokeWidth={1.2}
               dash={dash}
               lineCap="round"
@@ -216,7 +218,7 @@ export function CanvasView(props: {
                   ? [...props.draftZonePts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
                   : props.draftZonePts.map((p) => [p.x, p.y]),
               )}
-              stroke="#34d399"
+              stroke={props.draftZoneInvalid ? '#fb7185' : '#34d399'}
               strokeWidth={2}
               dash={dash}
               lineCap="round"
@@ -226,7 +228,7 @@ export function CanvasView(props: {
           {props.tool === 'draw-zone' && props.cursorWorld && props.draftZonePts.length >= 2 && (
             <Line
               points={[props.draftZonePts[0]!.x, props.draftZonePts[0]!.y, props.cursorWorld.x, props.cursorWorld.y]}
-              stroke="rgba(52, 211, 153, 0.55)"
+              stroke={props.draftZoneInvalid ? 'rgba(251, 113, 133, 0.7)' : 'rgba(52, 211, 153, 0.55)'}
               strokeWidth={1.2}
               dash={dash}
               lineCap="round"

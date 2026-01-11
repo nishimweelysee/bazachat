@@ -61,6 +61,93 @@ export function polygonArea(points: Array<[number, number]>): number {
   return Math.abs(area2) / 2
 }
 
+function orient(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
+  // cross((b-a),(c-a))
+  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+}
+
+function onSegment(ax: number, ay: number, bx: number, by: number, px: number, py: number, eps = 1e-9): boolean {
+  return px >= Math.min(ax, bx) - eps && px <= Math.max(ax, bx) + eps && py >= Math.min(ay, by) - eps && py <= Math.max(ay, by) + eps
+}
+
+function segmentIntersectionPoint(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+  eps = 1e-9,
+): [number, number] | null {
+  // Proper intersection (non-parallel). Collinear/overlap returns null (we treat shared endpoints as ok).
+  const rpx = bx - ax
+  const rpy = by - ay
+  const spx = dx - cx
+  const spy = dy - cy
+
+  const denom = rpx * spy - rpy * spx
+  if (Math.abs(denom) < eps) return null
+
+  const qpx = cx - ax
+  const qpy = cy - ay
+  const t = (qpx * spy - qpy * spx) / denom
+  const u = (qpx * rpy - qpy * rpx) / denom
+
+  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null
+
+  return [ax + t * rpx, ay + t * rpy]
+}
+
+export function polygonSelfIntersection(points: Array<[number, number]>): [number, number] | null {
+  // Returns an approximate intersection point if polygon edges self-intersect.
+  const n = points.length
+  if (n < 4) return null
+
+  // edges: (i -> i+1), plus closing edge (n-1 -> 0)
+  const get = (i: number) => points[(i + n) % n]!
+
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = get(i)
+    const [bx, by] = get(i + 1)
+    for (let j = i + 1; j < n; j++) {
+      // skip adjacent edges and the wrap-around adjacency
+      if (Math.abs(i - j) <= 1) continue
+      if (i === 0 && j === n - 1) continue
+
+      const [cx, cy] = get(j)
+      const [dx, dy] = get(j + 1)
+
+      // quick reject using orientation test + bounding
+      const o1 = orient(ax, ay, bx, by, cx, cy)
+      const o2 = orient(ax, ay, bx, by, dx, dy)
+      const o3 = orient(cx, cy, dx, dy, ax, ay)
+      const o4 = orient(cx, cy, dx, dy, bx, by)
+      const eps = 1e-9
+
+      const general = (o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)
+      const general2 = (o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps)
+
+      let intersects = general && general2
+
+      // handle touching (rare with snapping but possible)
+      if (!intersects) {
+        if (Math.abs(o1) <= eps && onSegment(ax, ay, bx, by, cx, cy)) intersects = true
+        else if (Math.abs(o2) <= eps && onSegment(ax, ay, bx, by, dx, dy)) intersects = true
+        else if (Math.abs(o3) <= eps && onSegment(cx, cy, dx, dy, ax, ay)) intersects = true
+        else if (Math.abs(o4) <= eps && onSegment(cx, cy, dx, dy, bx, by)) intersects = true
+      }
+
+      if (!intersects) continue
+
+      const p = segmentIntersectionPoint(ax, ay, bx, by, cx, cy, dx, dy)
+      return p ?? [cx, cy]
+    }
+  }
+  return null
+}
+
 // Create an arc segment from 3 points (start, mid, end).
 // Returns null if the points are collinear / circle can't be determined.
 export function arcFrom3Points(a: Pt, b: Pt, c: Pt):
