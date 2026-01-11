@@ -47,6 +47,8 @@ export function Sidebar(props: {
   onDeleteActiveLevel: () => void
   onDeletePitch: () => void
   hasPitch: boolean
+  canDuplicateSelected: boolean
+  onDuplicateSelected: () => void
 
   // selection actions
   selectedSeatCount: number
@@ -128,6 +130,12 @@ export function Sidebar(props: {
         <Tooltip label="Delete pitch/stage polygon">
           <Button color="red" variant="light" disabled={!props.venueId || !props.hasPitch} onClick={props.onDeletePitch}>
             Delete pitch
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Duplicate selected object (Ctrl/Cmd+D)">
+          <Button variant="light" disabled={!props.canDuplicateSelected} onClick={props.onDuplicateSelected}>
+            Duplicate selected
           </Button>
         </Tooltip>
 

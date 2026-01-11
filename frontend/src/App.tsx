@@ -969,6 +969,217 @@ function App() {
     setDraftZonePts([])
   }
 
+  function makeUniqueCopyName(base: string, existing: Set<string>): string {
+    const trimmed = base.trim() || 'Copy'
+    const candidates = [
+      `${trimmed} copy`,
+      `${trimmed} copy 2`,
+      `${trimmed} copy 3`,
+      `${trimmed} copy 4`,
+      `${trimmed} copy 5`,
+    ]
+    for (const c of candidates) {
+      if (!existing.has(c)) return c
+    }
+    // fallback
+    let i = 2
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const c = `${trimmed} copy ${i}`
+      if (!existing.has(c)) return c
+      i++
+    }
+  }
+
+  function translatePoints(pts: Array<[number, number]>, dx: number, dy: number): Array<[number, number]> {
+    return pts.map(([x, y]) => [x + dx, y + dy])
+  }
+
+  function translateSegments(segs: any[], dx: number, dy: number): PathSeg[] {
+    const out: PathSeg[] = []
+    for (const seg of segs) {
+      if (seg.type === 'line') {
+        out.push({ type: 'line', x1: seg.x1 + dx, y1: seg.y1 + dy, x2: seg.x2 + dx, y2: seg.y2 + dy })
+      } else if (seg.type === 'arc') {
+        out.push({
+          type: 'arc',
+          cx: seg.cx + dx,
+          cy: seg.cy + dy,
+          r: seg.r,
+          start_deg: seg.start_deg,
+          end_deg: seg.end_deg,
+          cw: Boolean(seg.cw),
+        })
+      }
+    }
+    return out
+  }
+
+  async function duplicateSelected() {
+    if (!venueId) return
+    const DX = 1.0
+    const DY = 1.0
+
+    // Zone
+    if (selectedZoneId) {
+      const z = zoneById.get(selectedZoneId) as any
+      if (!z) return
+      let pts: Array<[number, number]>
+      try {
+        pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+      } catch {
+        return
+      }
+      const sectionId = z.section_id as Id
+      const existingNames = new Set(zones.filter((zz: any) => (zz.section_id as Id) === sectionId).map((zz: any) => String(zz.name ?? '')))
+      const name = makeUniqueCopyName(String(z.name ?? 'Zone'), existingNames)
+      const created = await createZone(sectionId, {
+        name,
+        capacity: Number(z.capacity ?? 0),
+        polygonPoints: translatePoints(pts, DX, DY),
+      })
+      // preserve auto-capacity fields if present
+      const capacity_mode = (z.capacity_mode as any) ?? undefined
+      const density_per_m2 = z.density_per_m2 !== undefined ? Number(z.density_per_m2) : undefined
+      if (capacity_mode !== undefined || density_per_m2 !== undefined) {
+        await updateZone(created.id, { capacity_mode, density_per_m2 })
+      }
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      setSelectedZoneId(created.id)
+      setSelectedSeatId(null)
+      notifications.show({ message: 'Zone duplicated' })
+      return
+    }
+
+    // Row
+    if (activeRowId) {
+      const r = rowById.get(activeRowId) as any
+      if (!r) return
+      let path: { segments: any[]; gaps?: Array<[number, number]> }
+      try {
+        path = JSON.parse(r.geom_json as string) as any
+      } catch {
+        return
+      }
+      const sectionId = r.section_id as Id
+      const existingLabels = new Set(rows.filter((rr: any) => (rr.section_id as Id) === sectionId).map((rr: any) => String(rr.label ?? '')))
+      const label = makeUniqueCopyName(String(r.label ?? 'Row'), existingLabels)
+      const segs = translateSegments(path.segments ?? [], DX, DY)
+      const created = await createRow(sectionId, {
+        label,
+        order_index: Number(r.order_index ?? 0) + 1,
+        segments: segs,
+      })
+      const gaps = (path.gaps ?? []) as Array<[number, number]>
+      if (gaps.length) await updateRowPath(created.id, { segments: segs, gaps })
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      setActiveSectionId(sectionId)
+      setActiveRowId(created.id)
+      notifications.show({ message: 'Row duplicated (seats not copied)' })
+      return
+    }
+
+    async function cloneSectionToLevel(sectionId: Id, targetLevelId: Id, dx: number, dy: number): Promise<Id | null> {
+      const sec = sectionById.get(sectionId) as any
+      if (!sec) return null
+      let pts: Array<[number, number]>
+      try {
+        pts = JSON.parse(sec.geom_json as string) as Array<[number, number]>
+      } catch {
+        return null
+      }
+      const existingCodes = new Set(sections.filter((s: any) => (s.level_id as Id) === targetLevelId).map((s: any) => String(s.code ?? '')))
+      const code = makeUniqueCopyName(String(sec.code ?? 'Section'), existingCodes).replace(' copy', '-copy')
+
+      const createdSec = await createSection(targetLevelId, { code, polygonPoints: translatePoints(pts, dx, dy) })
+
+      // clone zones + rows from original section into new section
+      const srcZones = zones.filter((z: any) => (z.section_id as Id) === (sec.id as Id))
+      const usedZoneNames = new Set<string>()
+      for (const z of srcZones) usedZoneNames.add(String(z.name ?? ''))
+      const zoneNameSet = new Set<string>()
+
+      for (const z of srcZones as any[]) {
+        let zPts: Array<[number, number]>
+        try {
+          zPts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+        } catch {
+          continue
+        }
+        const zName = makeUniqueCopyName(String(z.name ?? 'Zone'), zoneNameSet.size ? zoneNameSet : usedZoneNames)
+        zoneNameSet.add(zName)
+        const createdZ = await createZone(createdSec.id, {
+          name: zName,
+          capacity: Number(z.capacity ?? 0),
+          polygonPoints: translatePoints(zPts, dx, dy),
+        })
+        const capacity_mode = (z.capacity_mode as any) ?? undefined
+        const density_per_m2 = z.density_per_m2 !== undefined ? Number(z.density_per_m2) : undefined
+        if (capacity_mode !== undefined || density_per_m2 !== undefined) {
+          await updateZone(createdZ.id, { capacity_mode, density_per_m2 })
+        }
+      }
+
+      const srcRows = rows.filter((rr: any) => (rr.section_id as Id) === (sec.id as Id))
+      const rowLabelSet = new Set<string>()
+      for (const rr of srcRows as any[]) {
+        let path: { segments: any[]; gaps?: Array<[number, number]> }
+        try {
+          path = JSON.parse(rr.geom_json as string) as any
+        } catch {
+          continue
+        }
+        const label = rowLabelSet.has(String(rr.label ?? ''))
+          ? makeUniqueCopyName(String(rr.label ?? 'Row'), rowLabelSet)
+          : String(rr.label ?? 'Row')
+        rowLabelSet.add(label)
+        const segs = translateSegments(path.segments ?? [], dx, dy)
+        const createdR = await createRow(createdSec.id, { label, order_index: Number(rr.order_index ?? 0), segments: segs })
+        const gaps = (path.gaps ?? []) as Array<[number, number]>
+        if (gaps.length) await updateRowPath(createdR.id, { segments: segs, gaps })
+      }
+
+      return createdSec.id
+    }
+
+    // Section (clone section + its rows + zones)
+    if (activeSectionId) {
+      const sec = sectionById.get(activeSectionId) as any
+      if (!sec) return
+      const newId = await cloneSectionToLevel(activeSectionId, sec.level_id as Id, DX, DY)
+      if (!newId) return
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      setActiveLevelId(sec.level_id as Id)
+      setActiveSectionId(newId)
+      setActiveRowId(null)
+      notifications.show({ message: 'Section duplicated (rows/zones copied; seats not copied)' })
+      return
+    }
+
+    // Level (clone level + all sections + their rows/zones)
+    if (activeLevelId) {
+      const lvl = levelById.get(activeLevelId) as any
+      if (!lvl) return
+      const existingLevelNames = new Set(levels.filter((l: any) => (l.venue_id as Id) === venueId).map((l: any) => String(l.name ?? '')))
+      const name = makeUniqueCopyName(String(lvl.name ?? 'Level'), existingLevelNames)
+      const createdL = await createLevel(venueId, { name, z_base_m: lvl.z_base_m !== undefined ? Number(lvl.z_base_m) : undefined })
+
+      const srcSecs = sections.filter((s: any) => (s.level_id as Id) === (lvl.id as Id))
+      const LDX = 5.0
+      const LDY = 5.0
+      for (const s of srcSecs as any[]) {
+        await cloneSectionToLevel(s.id as Id, createdL.id as Id, LDX, LDY)
+      }
+
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      setActiveLevelId(createdL.id)
+      setActiveSectionId(null)
+      setActiveRowId(null)
+      notifications.show({ message: 'Level duplicated (sections/rows/zones copied; seats not copied)' })
+      return
+    }
+  }
+
   function onWheel(e: any) {
     e.evt.preventDefault()
     if (animRef.current) cancelAnimationFrame(animRef.current)
@@ -1095,6 +1306,13 @@ function App() {
           })
           return
         }
+      }
+
+      // Duplicate selected object (when not typing)
+      if (!isTyping && (e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        duplicateSelected().catch((err) => notifications.show({ color: 'red', message: String(err) }))
+        return
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
@@ -1336,6 +1554,10 @@ function App() {
                 notifications.show({ message: 'Level deleted' })
               },
             })
+          }}
+          canDuplicateSelected={Boolean(selectedZoneId || activeRowId || activeSectionId || activeLevelId)}
+          onDuplicateSelected={() => {
+            duplicateSelected().catch((err) => notifications.show({ color: 'red', message: String(err) }))
           }}
           selectedSeatCount={selectedSeatIds.size}
           onBlockSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
@@ -1710,7 +1932,7 @@ function App() {
         <Stack gap="xs">
           <Text fw={700}>Keyboard</Text>
           <Text size="sm" c="dimmed">
-            Esc = cancel draft, Ctrl/Cmd+Z = undo, +/- = zoom, Ctrl/Cmd+0 = fit venue, F = fit selection, R = reset view, ? = open this help
+            Esc = cancel draft, Enter = finish drawing, Delete/Backspace = delete selected, Ctrl/Cmd+D = duplicate selected, Ctrl/Cmd+Z = undo, +/- = zoom, Ctrl/Cmd+0 = fit venue, F = fit selection, R = reset view, ? = open this help
           </Text>
           <Text fw={700} mt="sm">
             Drawing
