@@ -1,47 +1,11 @@
-class SeatingChart:
-    def __init__(self, rows, cols):
-        self.rows = rows
-        self.cols = cols
-        self.chart = [[None for _ in range(cols)] for _ in range(rows)]
-    
-    def assign_seat(self, row, col, person_name):
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            self.chart[row][col] = person_name
-            return True
-        return False
-    
-    def remove_seat(self, row, col):
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            self.chart[row][col] = None
-            return True
-        return False
-    
-    def get_person(self, row, col):
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            return self.chart[row][col]
-        return None
-    
-    def is_available(self, row, col):
-        return self.get_person(row, col) is None
-    
-    def display(self):
-        print("\nSeating Chart:")
-        print("   " + "  ".join(f"C{i}" for i in range(self.cols)))
-        for i, row in enumerate(self.chart):
-            print(f"R{i} " + "  ".join(f"{name[:3]:^3}" if name else " . " for name in row))
-    
-    def find_person(self, person_name):
-        for i, row in enumerate(self.chart):
-            for j, person in enumerate(row):
-                if person == person_name:
-                    return (i, j)
-        return None
+This repository now contains a small seating chart management system.
 
+Use the CLI:
 
-# Example usage
-if __name__ == "__main__":
-    chart = SeatingChart(4, 6)
-    chart.assign_seat(0, 0, "Alice")
-    chart.assign_seat(0, 1, "Bob")
-    chart.assign_seat(1, 2, "Charlie")
-    chart.display()
+  python3 -m seating_chart --help
+
+Quick example:
+
+  python3 -m seating_chart init --rows 4 --cols 6
+  python3 -m seating_chart assign --row 0 --col 0 --name "Alice"
+  python3 -m seating_chart show

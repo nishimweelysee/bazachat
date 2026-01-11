@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Default chart file produced by the CLI
+seating_chart.json
+
