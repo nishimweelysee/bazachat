@@ -80,6 +80,16 @@ export async function getRowMetrics(rowId: Id): Promise<{ row_id: Id; total_leng
   return await http(`/rows/${rowId}/metrics`)
 }
 
+export async function createZone(
+  sectionId: Id,
+  payload: { name: string; capacity: number; polygonPoints: Array<[number, number]> },
+): Promise<{ id: Id; name: string }> {
+  return await http(`/sections/${sectionId}/zones`, {
+    method: 'POST',
+    body: JSON.stringify({ name: payload.name, capacity: payload.capacity, polygon: { points: payload.polygonPoints } }),
+  })
+}
+
 export async function generateSeats(
   rowId: Id,
   payload: {
@@ -141,6 +151,7 @@ export type Snapshot = {
   sections: Array<Record<string, unknown>>
   rows: Array<Record<string, unknown>>
   seats: Array<Record<string, unknown>>
+  zones: Array<Record<string, unknown>>
   overrides: Array<Record<string, unknown>>
 }
 

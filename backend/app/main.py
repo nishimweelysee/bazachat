@@ -13,7 +13,7 @@ from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
 from .geometry import GeometryError, angle_deg, path_total_length, polygon_centroid, polygon_contains_point, seats_along_path
-from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue
+from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue, Zone
 from .schemas import (
     ConfigCreate,
     GenerateSeatsRequest,
@@ -28,6 +28,8 @@ from .schemas import (
     SectionUpdate,
     Snapshot,
     VenueCreate,
+    ZoneCreate,
+    ZoneUpdate,
 )
 
 
@@ -367,6 +369,10 @@ def venue_snapshot(venue_id: int, config_id: Optional[int] = None, session: Sess
     if row_ids:
         seats = session.exec(select(Seat).where(Seat.row_id.in_(row_ids))).all()
 
+    zones = []
+    if section_ids:
+        zones = session.exec(select(Zone).where(Zone.section_id.in_(section_ids))).all()
+
     overrides = []
     if config_id is not None:
         overrides = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
@@ -380,6 +386,7 @@ def venue_snapshot(venue_id: int, config_id: Optional[int] = None, session: Sess
         sections=[s.model_dump() for s in sections],
         rows=[r.model_dump() for r in rows],
         seats=[s.model_dump() for s in seats],
+        zones=[z.model_dump() for z in zones],
         overrides=[o.model_dump() for o in overrides],
     )
 
@@ -487,6 +494,7 @@ def export_package(venue_id: int, config_id: Optional[int] = None, session: Sess
     rows = session.exec(select(Row).where(Row.section_id.in_(section_ids))).all() if section_ids else []
     row_ids = [r.id for r in rows if r.id is not None]
     seats = session.exec(select(Seat).where(Seat.row_id.in_(row_ids))).all() if row_ids else []
+    zones = session.exec(select(Zone).where(Zone.section_id.in_(section_ids))).all() if section_ids else []
 
     configs = session.exec(select(Config).where(Config.venue_id == venue_id)).all()
     overrides = []
@@ -504,6 +512,7 @@ def export_package(venue_id: int, config_id: Optional[int] = None, session: Sess
         "sections": [{**s.model_dump(), "polygon": json.loads(s.geom_json)} for s in sections],
         "rows": [{**r.model_dump(), "path": json.loads(r.geom_json)} for r in rows],
         "seats": [s.model_dump() for s in seats],
+        "zones": [{**z.model_dump(), "polygon": json.loads(z.geom_json)} for z in zones],
         "configs": [c.model_dump() for c in configs],
         "overrides": [o.model_dump() for o in overrides],
     }
@@ -534,6 +543,7 @@ def import_package(payload: dict, session: Session = Depends(_session)) -> dict:
     id_map_row: dict[int, int] = {}
     id_map_seat: dict[int, int] = {}
     id_map_config: dict[int, int] = {}
+    id_map_zone: dict[int, int] = {}
 
     pitch = payload.get("pitch")
     if pitch and pitch.get("polygon"):
@@ -602,6 +612,21 @@ def import_package(payload: dict, session: Session = Depends(_session)) -> dict:
         session.refresh(nc)
         id_map_config[old_id] = int(nc.id)
 
+    for z in payload.get("zones", []):
+        old_id = int(z.get("id"))
+        old_section_id = int(z.get("section_id"))
+        nz = Zone(
+            section_id=id_map_section[old_section_id],
+            name=str(z.get("name", "")),
+            zone_type=z.get("zone_type", "standing"),
+            capacity=int(z.get("capacity", 0)),
+            geom_json=json.dumps(z.get("polygon") or []),
+        )
+        session.add(nz)
+        session.commit()
+        session.refresh(nz)
+        id_map_zone[old_id] = int(nz.id)
+
     for ov in payload.get("overrides", []):
         old_cfg_id = int(ov.get("config_id"))
         old_seat_id = int(ov.get("seat_id"))
@@ -615,4 +640,40 @@ def import_package(payload: dict, session: Session = Depends(_session)) -> dict:
 
     session.commit()
     return {"venue_id": v.id}
+
+
+@app.post("/sections/{section_id}/zones")
+def create_zone(section_id: int, payload: ZoneCreate, session: Session = Depends(_session)) -> dict:
+    sec = session.get(Section, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="section not found")
+    z = Zone(
+        section_id=section_id,
+        name=payload.name,
+        zone_type=payload.zone_type,
+        capacity=payload.capacity,
+        geom_json=json.dumps([[x, y] for (x, y) in payload.polygon.points]),
+    )
+    session.add(z)
+    session.commit()
+    session.refresh(z)
+    return {"id": z.id, "name": z.name}
+
+
+@app.put("/zones/{zone_id}")
+def update_zone(zone_id: int, payload: ZoneUpdate, session: Session = Depends(_session)) -> dict:
+    z = session.get(Zone, zone_id)
+    if not z:
+        raise HTTPException(status_code=404, detail="zone not found")
+    if payload.name is not None:
+        z.name = payload.name
+    if payload.zone_type is not None:
+        z.zone_type = payload.zone_type
+    if payload.capacity is not None:
+        z.capacity = payload.capacity
+    if payload.polygon is not None:
+        z.geom_json = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+    session.add(z)
+    session.commit()
+    return {"updated": True}
 

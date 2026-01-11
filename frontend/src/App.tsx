@@ -11,6 +11,7 @@ import {
   createSection,
   createVenue,
   bulkUpsertOverrides,
+  createZone,
   downloadSeatsCsv,
   exportVenuePackage,
   generateSeats,
@@ -26,7 +27,7 @@ import {
   type Id,
   type PathSeg,
 } from './api'
-import { arcFrom3Points, type Pt } from './geometry'
+import { arcFrom3Points, closestPointOnSegment, pointOnArc, type Pt } from './geometry'
 
 type Tool =
   | 'select'
@@ -34,6 +35,7 @@ type Tool =
   | 'draw-section'
   | 'draw-row-line'
   | 'draw-row-arc'
+  | 'draw-zone'
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
@@ -87,6 +89,7 @@ function App() {
   const [draftPts, setDraftPts] = useState<Pt[]>([])
   const [draftRowPts, setDraftRowPts] = useState<Pt[]>([])
   const [draftArcPts, setDraftArcPts] = useState<Pt[]>([])
+  const [draftZonePts, setDraftZonePts] = useState<Pt[]>([])
 
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [gridStep, setGridStep] = useState(0.1)
@@ -115,6 +118,10 @@ function App() {
 
   const [createSectionOpen, setCreateSectionOpen] = useState(false)
   const [newSectionCode, setNewSectionCode] = useState('101')
+
+  const [createZoneOpen, setCreateZoneOpen] = useState(false)
+  const [newZoneName, setNewZoneName] = useState('Standing')
+  const [newZoneCap, setNewZoneCap] = useState(500)
 
   const [createRowOpen, setCreateRowOpen] = useState(false)
   const [newRowLabel, setNewRowLabel] = useState('1')
@@ -309,6 +316,7 @@ function App() {
   const sections = useMemo(() => (data?.sections ?? []) as any[], [data])
   const rows = useMemo(() => (data?.rows ?? []) as any[], [data])
   const seats = useMemo(() => (data?.seats ?? []) as any[], [data])
+  const zones = useMemo(() => (data?.zones ?? []) as any[], [data])
   const overrides = useMemo(() => (data?.overrides ?? []) as any[], [data])
 
   const pitchPoints = useMemo(() => {
@@ -366,7 +374,57 @@ function App() {
   function snap(p: Pt): Pt {
     if (!snapEnabled) return p
     const step = Math.max(0.001, gridStep)
-    return { x: Math.round(p.x / step) * step, y: Math.round(p.y / step) * step }
+    const grid = { x: Math.round(p.x / step) * step, y: Math.round(p.y / step) * step }
+
+    // Snap-to-geometry: nearest section/row vertex or edge within tolerance.
+    const tol = Math.max(step * 2, 0.25)
+    let bestPoint: Pt | null = null
+    let bestDist = Number.POSITIVE_INFINITY
+
+    const consider = (q: Pt) => {
+      const d = Math.hypot(q.x - p.x, q.y - p.y)
+      if (d <= tol && d < bestDist) {
+        bestDist = d
+        bestPoint = q
+      }
+    }
+
+    // vertices (sections)
+    for (const s of sections) {
+      try {
+        const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
+        for (const [x, y] of pts) consider({ x, y })
+        // edges
+        for (let i = 0; i < pts.length; i++) {
+          const a = { x: pts[i]![0], y: pts[i]![1] }
+          const b = { x: pts[(i + 1) % pts.length]![0], y: pts[(i + 1) % pts.length]![1] }
+          consider(closestPointOnSegment(p, a, b))
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // rows (line segments + sampled arcs)
+    for (const r of rows) {
+      try {
+        const path = JSON.parse(r.geom_json as string) as { segments: any[] }
+        for (const seg of path.segments) {
+          if (seg.type === 'line') {
+            consider({ x: seg.x1, y: seg.y1 })
+            consider({ x: seg.x2, y: seg.y2 })
+            consider(closestPointOnSegment(p, { x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }))
+          } else if (seg.type === 'arc') {
+            // sample for edge snapping
+            for (let i = 0; i <= 24; i++) consider(pointOnArc(seg, i / 24))
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return bestPoint ?? grid
   }
 
   function stageToWorld(stage: any): Pt {
@@ -382,6 +440,11 @@ function App() {
 
     if (tool === 'draw-pitch' || tool === 'draw-section') {
       setDraftPts((prev) => [...prev, p])
+      return
+    }
+
+    if (tool === 'draw-zone') {
+      setDraftZonePts((prev) => [...prev, p])
       return
     }
 
@@ -525,6 +588,8 @@ function App() {
       }
     } else if (tool === 'draw-section') {
       if (draftPts.length >= 3) setCreateSectionOpen(true)
+    } else if (tool === 'draw-zone') {
+      if (draftZonePts.length >= 3) setCreateZoneOpen(true)
     } else if (tool === 'draw-row-line') {
       if (draftRowPts.length >= 2) setCreateRowOpen(true)
     } else if (tool === 'draw-row-arc') {
@@ -542,6 +607,7 @@ function App() {
     setDraftPts([])
     setDraftRowPts([])
     setDraftArcPts([])
+    setDraftZonePts([])
   }
 
   function onWheel(e: any) {
@@ -725,6 +791,18 @@ function App() {
               Generate seats
             </Button>
           </Group>
+          <Group grow>
+            <Button
+              variant={tool === 'draw-zone' ? 'filled' : 'light'}
+              disabled={!activeSectionId}
+              onClick={() => {
+                setDraftZonePts([])
+                setTool('draw-zone')
+              }}
+            >
+              Draw standing zone
+            </Button>
+          </Group>
 
           <Text fw={700} mt="md">
             Configuration paint
@@ -878,6 +956,7 @@ function App() {
             <Layer>
               {pitchPoints && <Line points={toPoints(pitchPoints)} closed stroke="#22c55e" strokeWidth={2} />}
               {draftPts.length >= 2 && <Line points={toPoints(draftPts.map((p) => [p.x, p.y]))} stroke="#a78bfa" strokeWidth={2} />}
+              {draftZonePts.length >= 2 && <Line points={toPoints(draftZonePts.map((p) => [p.x, p.y]))} stroke="#34d399" strokeWidth={2} />}
 
               {sections.map((s) => {
                 const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
@@ -888,12 +967,28 @@ function App() {
                     points={toPoints(pts)}
                     closed
                     stroke={isActive ? '#60a5fa' : '#334155'}
+                    fill={isActive ? 'rgba(96, 165, 250, 0.08)' : 'rgba(51, 65, 85, 0.05)'}
                     strokeWidth={isActive ? 2.5 : 1.5}
                     onClick={(e) => {
                       e.cancelBubble = true
                       setActiveLevelId(s.level_id as Id)
                       setActiveSectionId(s.id as Id)
                     }}
+                  />
+                )
+              })}
+
+              {/* Standing zones */}
+              {zones.map((z) => {
+                const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+                return (
+                  <Line
+                    key={`zone-${z.id}`}
+                    points={toPoints(pts)}
+                    closed
+                    stroke="#34d399"
+                    fill="rgba(52, 211, 153, 0.15)"
+                    strokeWidth={1.5}
                   />
                 )
               })}
@@ -997,6 +1092,44 @@ function App() {
                   />
                 ))}
 
+              {/* Active arc row handles (single-arc rows): drag 3-point representation and re-fit arc */}
+              {tool === 'select' &&
+                activeRowPath?.segments?.length === 1 &&
+                (activeRowPath.segments[0] as any)?.type === 'arc' &&
+                (() => {
+                  const seg = activeRowPath.segments[0] as any
+                  const a = pointOnArc(seg, 0)
+                  const b = pointOnArc(seg, 0.5)
+                  const c = pointOnArc(seg, 1)
+                  const pts: Array<{ key: string; p: Pt; idx: 0 | 1 | 2 }> = [
+                    { key: 'a', p: a, idx: 0 },
+                    { key: 'b', p: b, idx: 1 },
+                    { key: 'c', p: c, idx: 2 },
+                  ]
+                  return pts.map((h) => (
+                    <Circle
+                      key={`arc-h-${h.key}`}
+                      x={h.p.x}
+                      y={h.p.y}
+                      radius={0.22}
+                      fill="#f97316"
+                      draggable
+                      onDragEnd={(e) => {
+                        const sp = snap({ x: e.target.x(), y: e.target.y() })
+                        // Re-fit arc from 3 points (start/mid/end)
+                        const curA = h.idx === 0 ? sp : a
+                        const curB = h.idx === 1 ? sp : b
+                        const curC = h.idx === 2 ? sp : c
+                        const arc = arcFrom3Points(curA, curB, curC)
+                        if (!arc || !activeRowId) return
+                        updateRowPath(activeRowId, { segments: [{ type: 'arc', ...arc } as any], gaps: activeRowGaps })
+                          .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                          .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+                      }}
+                    />
+                  ))
+                })()}
+
               {/* Hover tooltip */}
               {hoverSeatInfo && (
                 <KText x={hoverSeatInfo.x + 0.25} y={hoverSeatInfo.y + 0.25} text={hoverSeatInfo.code} fontSize={0.25} fill="#e2e8f0" />
@@ -1052,6 +1185,32 @@ function App() {
           <TextInput label="Section code" value={newSectionCode} onChange={(e) => setNewSectionCode(e.target.value)} />
           <Button onClick={() => createSectionM.mutate()} disabled={!newSectionCode.trim()}>
             Save section
+          </Button>
+        </Stack>
+      </Modal>
+
+      <Modal opened={createZoneOpen} onClose={() => setCreateZoneOpen(false)} title="Create standing zone">
+        <Stack>
+          <TextInput label="Zone name" value={newZoneName} onChange={(e) => setNewZoneName(e.target.value)} />
+          <NumberInput label="Capacity" value={newZoneCap} onChange={(v) => setNewZoneCap(Number(v ?? 0))} />
+          <Button
+            disabled={!activeSectionId || draftZonePts.length < 3 || !newZoneName.trim()}
+            onClick={() => {
+              createZone(activeSectionId!, {
+                name: newZoneName.trim(),
+                capacity: newZoneCap,
+                polygonPoints: draftZonePts.map((p) => [p.x, p.y]),
+              })
+                .then(() => {
+                  setCreateZoneOpen(false)
+                  setDraftZonePts([])
+                  qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                  notifications.show({ message: 'Zone created' })
+                })
+                .catch((e) => notifications.show({ color: 'red', message: String(e) }))
+            }}
+          >
+            Save zone
           </Button>
         </Stack>
       </Modal>

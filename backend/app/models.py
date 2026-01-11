@@ -27,6 +27,10 @@ class SeatType(str, Enum):
     rail = "rail"
 
 
+class ZoneType(str, Enum):
+    standing = "standing"
+
+
 class Venue(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
@@ -121,4 +125,17 @@ class SeatOverride(SQLModel, table=True):
     notes: str = ""
 
     updated_at: datetime = Field(default_factory=_utc_now)
+
+
+class Zone(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    section_id: int = Field(index=True, foreign_key="section.id")
+    name: str
+    zone_type: ZoneType = ZoneType.standing
+    capacity: int = 0
+
+    # JSON polygon: [[x,y], ...]
+    geom_json: str
+    created_at: datetime = Field(default_factory=_utc_now)
+
 

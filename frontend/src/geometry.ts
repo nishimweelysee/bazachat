@@ -6,6 +6,31 @@ export function dist(a: Pt, b: Pt): number {
   return Math.hypot(dx, dy)
 }
 
+export function pointOnArc(seg: { cx: number; cy: number; r: number; start_deg: number; end_deg: number; cw: boolean }, t01: number): Pt {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const norm = (r: number) => ((r % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+  const s = norm(toRad(seg.start_deg))
+  const e = norm(toRad(seg.end_deg))
+  const cwDelta = (s: number, e: number) => (s - e + 2 * Math.PI) % (2 * Math.PI)
+  const ccwDelta = (s: number, e: number) => (e - s + 2 * Math.PI) % (2 * Math.PI)
+  const delta = seg.cw ? cwDelta(s, e) : ccwDelta(s, e)
+  const t = Math.max(0, Math.min(1, t01))
+  const ang = seg.cw ? norm(s - delta * t) : norm(s + delta * t)
+  return { x: seg.cx + seg.r * Math.cos(ang), y: seg.cy + seg.r * Math.sin(ang) }
+}
+
+export function closestPointOnSegment(p: Pt, a: Pt, b: Pt): Pt {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const apx = p.x - a.x
+  const apy = p.y - a.y
+  const ab2 = abx * abx + aby * aby
+  if (ab2 <= 1e-12) return a
+  let t = (apx * abx + apy * aby) / ab2
+  t = Math.max(0, Math.min(1, t))
+  return { x: a.x + abx * t, y: a.y + aby * t }
+}
+
 // Create an arc segment from 3 points (start, mid, end).
 // Returns null if the points are collinear / circle can't be determined.
 export function arcFrom3Points(a: Pt, b: Pt, c: Pt):

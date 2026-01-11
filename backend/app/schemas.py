@@ -4,7 +4,7 @@ from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-from .models import SeatStatus, SeatType
+from .models import SeatStatus, SeatType, ZoneType
 
 
 class Point2D(BaseModel):
@@ -96,6 +96,20 @@ class RowMetrics(BaseModel):
     total_length_m: float
 
 
+class ZoneCreate(BaseModel):
+    name: str
+    zone_type: ZoneType = ZoneType.standing
+    capacity: int = Field(ge=0, default=0)
+    polygon: Polygon
+
+
+class ZoneUpdate(BaseModel):
+    name: Optional[str] = None
+    zone_type: Optional[ZoneType] = None
+    capacity: Optional[int] = Field(default=None, ge=0)
+    polygon: Optional[Polygon] = None
+
+
 class GenerateSeatsRequest(BaseModel):
     seat_pitch_m: float = Field(gt=0.1, default=0.5)
     start_offset_m: float = Field(ge=0, default=0.2)
@@ -131,5 +145,6 @@ class Snapshot(BaseModel):
     sections: list[dict]
     rows: list[dict]
     seats: list[dict]
+    zones: list[dict]
     overrides: list[dict]
 

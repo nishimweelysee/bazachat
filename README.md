@@ -103,3 +103,7 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Bulk paint**: with a config selected, drag a rectangle on the canvas to paint many seats at once.
 - **Shift-select**: with a config selected, **shift-drag** to add seats to a selection, then apply Block/Kill/Clear to the whole selection.
 - **Export CSV**: downloads `seats.csv` including effective status per config.
+- **Row gaps (aisles)**: add skip intervals (meters) so seat generation leaves aisles/vomitories.
+- **Arc row editing**: select an arc row and drag its 3 orange handles to reshape (start/mid/end).
+- **Standing zones**: “Draw standing zone” inside a section and save its capacity.
+- **Smart snapping**: snapping prefers nearby existing vertices/edges (plus grid).
