@@ -16,6 +16,7 @@ import {
   downloadSeatsCsv,
   downloadZonesCsv,
   downloadManifestCsv,
+  downloadBreakdownCsv,
   exportVenuePackage,
   generateSeats,
   getRowMetrics,
@@ -191,6 +192,20 @@ function App() {
       URL.revokeObjectURL(url)
     },
     onSuccess: () => notifications.show({ message: 'Manifest CSV download started' }),
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const exportBreakdownCsvM = useMutation({
+    mutationFn: async () => {
+      const blob = await downloadBreakdownCsv(venueId!, configId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `venue_${venueId}_breakdown.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    onSuccess: () => notifications.show({ message: 'Breakdown CSV download started' }),
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
@@ -460,8 +475,7 @@ function App() {
     const q = breakdownFilter.trim().toLowerCase()
     const filtered = q
       ? raw.filter((r) => {
-          const name =
-            breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name ?? r.level_name ?? r.level_name ?? r.level_name ?? r.level_name}`
+          const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
           return String(name).toLowerCase().includes(q)
         })
       : raw
@@ -1091,6 +1105,9 @@ function App() {
             onChange={(v) => setBreakdownView((v as any) ?? 'sections')}
           />
           <TextInput label="Filter" value={breakdownFilter} onChange={(e) => setBreakdownFilter(e.target.value)} placeholder="e.g. Lower/101" />
+          <Button variant="light" disabled={!venueId} onClick={() => exportBreakdownCsvM.mutate()}>
+            Export breakdown CSV
+          </Button>
           {breakdownQ.data ? (
             <Table withColumnBorders withRowBorders={false} striped highlightOnHover>
               <Table.Thead>
@@ -1131,7 +1148,21 @@ function App() {
                 {breakdownRows.slice(0, 30).map((r: any, i: number) => {
                   const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
                   return (
-                    <Table.Tr key={`br-${i}`}>
+                    <Table.Tr
+                      key={`br-${i}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => {
+                        if (breakdownView === 'sections') {
+                          setActiveLevelId(r.level_id as Id)
+                          setActiveSectionId(r.section_id as Id)
+                          setActiveRowId(null)
+                        } else {
+                          setActiveLevelId(r.level_id as Id)
+                          setActiveSectionId(null)
+                          setActiveRowId(null)
+                        }
+                      }}
+                    >
                       <Table.Td>{name}</Table.Td>
                       <Table.Td>{r.sellable}</Table.Td>
                       <Table.Td>{r.blocked}</Table.Td>

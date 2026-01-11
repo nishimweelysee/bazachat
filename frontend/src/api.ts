@@ -121,6 +121,17 @@ export async function getVenueSummaryBreakdown(
   return await http(`/venues/${venueId}/summary-breakdown${q}`)
 }
 
+export async function downloadBreakdownCsv(venueId: Id, configId?: Id | null): Promise<Blob> {
+  const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+  const q = configId ? `?config_id=${configId}` : ''
+  const res = await fetch(`${API_BASE}/venues/${venueId}/summary-breakdown.csv${q}`)
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)
+  }
+  return await res.blob()
+}
+
 export async function generateSeats(
   rowId: Id,
   payload: {

@@ -649,6 +649,56 @@ def venue_summary_breakdown(venue_id: int, config_id: Optional[int] = None, sess
     }
 
 
+@app.get("/venues/{venue_id}/summary-breakdown.csv")
+def venue_summary_breakdown_csv(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> Response:
+    data = venue_summary_breakdown(venue_id=venue_id, config_id=config_id, session=session)
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["record_type", "venue_id", "config_id", "level_id", "level_name", "section_id", "section_code", "total", "sellable", "blocked", "kill", "standing_capacity"])
+
+    for lvl in data.get("levels", []):
+        w.writerow(
+            [
+                "level",
+                venue_id,
+                config_id or "",
+                lvl.get("level_id"),
+                lvl.get("level_name"),
+                "",
+                "",
+                lvl.get("total", 0),
+                lvl.get("sellable", 0),
+                lvl.get("blocked", 0),
+                lvl.get("kill", 0),
+                lvl.get("standing_capacity", 0),
+            ]
+        )
+
+    for sec in data.get("sections", []):
+        w.writerow(
+            [
+                "section",
+                venue_id,
+                config_id or "",
+                sec.get("level_id"),
+                sec.get("level_name"),
+                sec.get("section_id"),
+                sec.get("section_code"),
+                sec.get("total", 0),
+                sec.get("sellable", 0),
+                sec.get("blocked", 0),
+                sec.get("kill", 0),
+                sec.get("standing_capacity", 0),
+            ]
+        )
+
+    return Response(
+        content=out.getvalue(),
+        media_type="text/csv",
+        headers={"content-disposition": f'attachment; filename="venue_{venue_id}_breakdown.csv"'},
+    )
+
+
 @app.get("/venues/{venue_id}/package")
 def export_package(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
     """
