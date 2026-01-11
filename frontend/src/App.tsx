@@ -20,6 +20,7 @@ import {
   generateSeats,
   getRowMetrics,
   getVenueSummary,
+  getVenueSummaryBreakdown,
   importVenuePackage,
   listVenues,
   listConfigs,
@@ -410,15 +411,25 @@ function App() {
     enabled: venueId !== null,
   })
 
+  const breakdownQ = useQuery({
+    queryKey: ['breakdown', venueId, configId],
+    queryFn: () => getVenueSummaryBreakdown(venueId!, configId),
+    enabled: venueId !== null,
+  })
+
   const [editZoneOpen, setEditZoneOpen] = useState(false)
   const [editZoneName, setEditZoneName] = useState('')
   const [editZoneCap, setEditZoneCap] = useState(0)
   const [densityPerM2, setDensityPerM2] = useState(2.0)
+  const [zoneAuto, setZoneAuto] = useState(false)
 
   useEffect(() => {
     if (!zoneInfo) return
     setEditZoneName(zoneInfo.name)
     setEditZoneCap(zoneInfo.capacity)
+    const z = zoneById.get(zoneInfo.id) as any
+    setZoneAuto((z?.capacity_mode ?? 'manual') === 'auto')
+    setDensityPerM2(Number(z?.density_per_m2 ?? 2.0))
   }, [zoneInfo])
 
   const hoverSeatInfo = useMemo(() => {
@@ -1025,6 +1036,28 @@ function App() {
           )}
 
           <Text fw={700} mt="md">
+            Breakdown (sections)
+          </Text>
+          {breakdownQ.data ? (
+            <Stack gap={2}>
+              {(breakdownQ.data.sections as any[]).slice(0, 12).map((s, i) => (
+                <Text key={`sec-sum-${i}`} size="sm" c="dimmed">
+                  {s.level_name}/{s.section_code}: sellable {s.sellable}, blocked {s.blocked}, kill {s.kill}, standing {s.standing_capacity}
+                </Text>
+              ))}
+              {(breakdownQ.data.sections as any[]).length > 12 && (
+                <Text size="sm" c="dimmed">
+                  …and {(breakdownQ.data.sections as any[]).length - 12} more
+                </Text>
+              )}
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              —
+            </Text>
+          )}
+
+          <Text fw={700} mt="md">
             Zone inspector
           </Text>
           {zoneInfo ? (
@@ -1385,6 +1418,7 @@ function App() {
           <TextInput label="Zone name" value={editZoneName} onChange={(e) => setEditZoneName(e.target.value)} />
           <NumberInput label="Capacity" value={editZoneCap} onChange={(v) => setEditZoneCap(Number(v ?? 0))} />
           <NumberInput label="Density (people / m²)" value={densityPerM2} onChange={(v) => setDensityPerM2(Number(v ?? 0))} decimalScale={2} />
+          <Switch label="Auto capacity (area × density)" checked={zoneAuto} onChange={(e) => setZoneAuto(e.currentTarget.checked)} />
           <Button
             variant="light"
             disabled={!selectedZoneId}
@@ -1405,7 +1439,12 @@ function App() {
             disabled={!selectedZoneId}
             onClick={() => {
               if (!selectedZoneId) return
-              updateZone(selectedZoneId, { name: editZoneName.trim(), capacity: editZoneCap })
+              updateZone(selectedZoneId, {
+                name: editZoneName.trim(),
+                capacity: editZoneCap,
+                capacity_mode: zoneAuto ? 'auto' : 'manual',
+                density_per_m2: densityPerM2,
+              })
                 .then(() => {
                   qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
                   setEditZoneOpen(false)

@@ -13,7 +13,7 @@ from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
 from .geometry import GeometryError, angle_deg, path_total_length, polygon_area_m2, polygon_centroid, polygon_contains_point, seats_along_path
-from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue, Zone
+from .models import CapacityMode, Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue, Zone
 from .schemas import (
     ConfigCreate,
     GenerateSeatsRequest,
@@ -569,6 +569,86 @@ def venue_summary(venue_id: int, config_id: Optional[int] = None, session: Sessi
     }
 
 
+@app.get("/venues/{venue_id}/summary-breakdown")
+def venue_summary_breakdown(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_by_id = {int(l.id): l for l in levels if l.id is not None}
+    sections = session.exec(select(Section).where(Section.level_id.in_(list(level_by_id.keys())))).all() if level_by_id else []
+    section_by_id = {int(s.id): s for s in sections if s.id is not None}
+    rows = session.exec(select(Row).where(Row.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+    row_by_id = {int(r.id): r for r in rows if r.id is not None}
+    seats = session.exec(select(Seat).where(Seat.row_id.in_(list(row_by_id.keys())))).all() if row_by_id else []
+    zones = session.exec(select(Zone).where(Zone.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+
+    overrides_by_seat: dict[int, SeatOverride] = {}
+    if config_id is not None:
+        cfg = session.get(Config, config_id)
+        if not cfg or cfg.venue_id != venue_id:
+            raise HTTPException(status_code=404, detail="config not found for this venue")
+        ovs = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
+        overrides_by_seat = {int(o.seat_id): o for o in ovs}
+
+    def init_counts() -> dict:
+        return {"total": 0, "sellable": 0, "blocked": 0, "kill": 0, "standing_capacity": 0}
+
+    by_level: dict[int, dict] = {lid: init_counts() for lid in level_by_id.keys()}
+    by_section: dict[int, dict] = {sid: init_counts() for sid in section_by_id.keys()}
+
+    for z in zones:
+        sec_id = int(z.section_id)
+        sec = section_by_id.get(sec_id)
+        if not sec:
+            continue
+        lvl_id = int(sec.level_id)
+        cap = int(z.capacity or 0)
+        by_section[sec_id]["standing_capacity"] += cap
+        by_level[lvl_id]["standing_capacity"] += cap
+
+    for s in seats:
+        r = row_by_id.get(int(s.row_id))
+        if not r:
+            continue
+        sec = section_by_id.get(int(r.section_id))
+        if not sec:
+            continue
+        lvl_id = int(sec.level_id)
+        sec_id = int(sec.id)
+
+        o = overrides_by_seat.get(int(s.id)) if s.id is not None else None
+        status = (o.status if o else SeatStatus.sellable).value
+
+        for bucket in (by_level[lvl_id], by_section[sec_id]):
+            bucket["total"] += 1
+            if status == SeatStatus.blocked.value:
+                bucket["blocked"] += 1
+            elif status == SeatStatus.kill.value:
+                bucket["kill"] += 1
+            else:
+                bucket["sellable"] += 1
+
+    return {
+        "venue_id": venue_id,
+        "config_id": config_id,
+        "levels": [
+            {"level_id": lid, "level_name": level_by_id[lid].name, **by_level[lid]} for lid in sorted(by_level.keys())
+        ],
+        "sections": [
+            {
+                "section_id": sid,
+                "level_id": int(section_by_id[sid].level_id),
+                "level_name": level_by_id[int(section_by_id[sid].level_id)].name,
+                "section_code": section_by_id[sid].code,
+                **by_section[sid],
+            }
+            for sid in sorted(by_section.keys(), key=lambda x: (int(section_by_id[x].level_id), str(section_by_id[x].code)))
+        ],
+    }
+
+
 @app.get("/venues/{venue_id}/package")
 def export_package(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
     """
@@ -745,6 +825,8 @@ def create_zone(section_id: int, payload: ZoneCreate, session: Session = Depends
         name=payload.name,
         zone_type=payload.zone_type,
         capacity=payload.capacity,
+        capacity_mode=payload.capacity_mode,
+        density_per_m2=payload.density_per_m2,
         geom_json=json.dumps([[x, y] for (x, y) in payload.polygon.points]),
     )
     session.add(z)
@@ -764,8 +846,21 @@ def update_zone(zone_id: int, payload: ZoneUpdate, session: Session = Depends(_s
         z.zone_type = payload.zone_type
     if payload.capacity is not None:
         z.capacity = payload.capacity
+    if payload.capacity_mode is not None:
+        z.capacity_mode = payload.capacity_mode
+    if payload.density_per_m2 is not None:
+        z.density_per_m2 = payload.density_per_m2
     if payload.polygon is not None:
         z.geom_json = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+
+    # Auto capacity sync (area × density)
+    if z.capacity_mode == CapacityMode.auto:
+        try:
+            poly = [(float(x), float(y)) for [x, y] in json.loads(z.geom_json)]
+            area = polygon_area_m2(poly)
+            z.capacity = max(0, int(round(area * float(z.density_per_m2 or 0.0))))
+        except Exception:
+            pass
     session.add(z)
     session.commit()
     return {"updated": True}
@@ -809,6 +904,7 @@ def zone_compute_capacity(zone_id: int, payload: dict, session: Session = Depend
 
     capacity = int(round(area * density))
     z.capacity = max(0, capacity)
+    z.density_per_m2 = density
     session.add(z)
     session.commit()
     return {"zone_id": zone_id, "area_m2": area, "density_per_m2": density, "capacity": z.capacity}
@@ -854,6 +950,55 @@ def export_manifest_csv(venue_id: int, config_id: int, session: Session = Depend
         else:
             sellable += 1
     standing_capacity = sum(int(z.capacity or 0) for z in zones)
+
+    # breakdown maps
+    by_level: dict[str, dict] = {}
+    by_section: dict[str, dict] = {}
+    for s in seats:
+        r = row_by_id.get(int(s.row_id))
+        if not r:
+            continue
+        sec = section_by_id.get(int(r.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+        lvl_key = lvl.name
+        sec_key = f"{lvl.name}/{sec.code}"
+        by_level.setdefault(lvl_key, {"total": 0, "sellable": 0, "blocked": 0, "kill": 0, "standing_capacity": 0})
+        by_section.setdefault(
+            sec_key,
+            {"level": lvl.name, "section": sec.code, "total": 0, "sellable": 0, "blocked": 0, "kill": 0, "standing_capacity": 0},
+        )
+        o = overrides_by_seat.get(int(s.id)) if s.id is not None else None
+        status = (o.status if o else SeatStatus.sellable).value
+        for bucket in (by_level[lvl_key], by_section[sec_key]):
+            bucket["total"] += 1
+            if status == SeatStatus.blocked.value:
+                bucket["blocked"] += 1
+            elif status == SeatStatus.kill.value:
+                bucket["kill"] += 1
+            else:
+                bucket["sellable"] += 1
+
+    for z in zones:
+        sec = section_by_id.get(int(z.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+        lvl_key = lvl.name
+        sec_key = f"{lvl.name}/{sec.code}"
+        by_level.setdefault(lvl_key, {"total": 0, "sellable": 0, "blocked": 0, "kill": 0, "standing_capacity": 0})
+        by_section.setdefault(
+            sec_key,
+            {"level": lvl.name, "section": sec.code, "total": 0, "sellable": 0, "blocked": 0, "kill": 0, "standing_capacity": 0},
+        )
+        cap = int(z.capacity or 0)
+        by_level[lvl_key]["standing_capacity"] += cap
+        by_section[sec_key]["standing_capacity"] += cap
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -917,6 +1062,73 @@ def export_manifest_csv(venue_id: int, config_id: int, session: Session = Depend
             standing_capacity,
         ]
     )
+
+    # breakdown records
+    for lvl_name in sorted(by_level.keys()):
+        b = by_level[lvl_name]
+        w.writerow(
+            [
+                "level_summary",
+                venue.name,
+                config_id,
+                cfg.name,
+                lvl_name,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                b["total"],
+                b["sellable"],
+                b["blocked"],
+                b["kill"],
+                b["standing_capacity"],
+            ]
+        )
+
+    for sec_key in sorted(by_section.keys(), key=lambda k: (by_section[k]["level"], by_section[k]["section"])):
+        b = by_section[sec_key]
+        w.writerow(
+            [
+                "section_summary",
+                venue.name,
+                config_id,
+                cfg.name,
+                b["level"],
+                b["section"],
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                b["total"],
+                b["sellable"],
+                b["blocked"],
+                b["kill"],
+                b["standing_capacity"],
+            ]
+        )
 
     for s in seats:
         r = row_by_id.get(int(s.row_id))

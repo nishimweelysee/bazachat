@@ -112,3 +112,5 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Zone labels**: standing zones show name + capacity on the canvas.
 - **Capacity from area**: edit a zone and compute capacity from polygon area × density (people/m²).
 - **Manifest export**: download a single `manifest.csv` for a config (summary + seats + zones).
+- **Auto zone capacity**: set a zone to auto mode so capacity stays synced when the polygon changes.
+- **Summary breakdown**: per-section totals (sellable/blocked/kill + standing capacity) for the active config.

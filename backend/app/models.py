@@ -31,6 +31,11 @@ class ZoneType(str, Enum):
     standing = "standing"
 
 
+class CapacityMode(str, Enum):
+    manual = "manual"
+    auto = "auto"  # capacity derived from area_m2 * density_per_m2
+
+
 class Venue(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
@@ -133,6 +138,8 @@ class Zone(SQLModel, table=True):
     name: str
     zone_type: ZoneType = ZoneType.standing
     capacity: int = 0
+    capacity_mode: CapacityMode = CapacityMode.manual
+    density_per_m2: float = 0.0
 
     # JSON polygon: [[x,y], ...]
     geom_json: str

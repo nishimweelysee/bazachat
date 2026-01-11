@@ -4,7 +4,7 @@ from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-from .models import SeatStatus, SeatType, ZoneType
+from .models import CapacityMode, SeatStatus, SeatType, ZoneType
 
 
 class Point2D(BaseModel):
@@ -100,6 +100,8 @@ class ZoneCreate(BaseModel):
     name: str
     zone_type: ZoneType = ZoneType.standing
     capacity: int = Field(ge=0, default=0)
+    capacity_mode: CapacityMode = CapacityMode.manual
+    density_per_m2: float = Field(ge=0, default=0.0)
     polygon: Polygon
 
 
@@ -107,6 +109,8 @@ class ZoneUpdate(BaseModel):
     name: Optional[str] = None
     zone_type: Optional[ZoneType] = None
     capacity: Optional[int] = Field(default=None, ge=0)
+    capacity_mode: Optional[CapacityMode] = None
+    density_per_m2: Optional[float] = Field(default=None, ge=0)
     polygon: Optional[Polygon] = None
 
 

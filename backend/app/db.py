@@ -20,11 +20,30 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
 )
 
+def _maybe_migrate() -> None:
+    # Minimal SQLite migrations for local dev; avoids requiring Alembic.
+    # Only adds new columns if missing.
+    try:
+        with engine.connect() as conn:
+            res = conn.exec_driver_sql("PRAGMA table_info('zone')").fetchall()
+            if not res:
+                return
+            cols = {r[1] for r in res}  # name is index 1
+            if "capacity_mode" not in cols:
+                conn.exec_driver_sql("ALTER TABLE zone ADD COLUMN capacity_mode VARCHAR DEFAULT 'manual'")
+            if "density_per_m2" not in cols:
+                conn.exec_driver_sql("ALTER TABLE zone ADD COLUMN density_per_m2 FLOAT DEFAULT 0.0")
+            conn.commit()
+    except Exception:
+        # If anything goes wrong, keep startup resilient; dev can delete ./data DB.
+        return
+
 
 def init_db() -> None:
     from . import models  # noqa: F401 - ensure models are registered
 
     SQLModel.metadata.create_all(engine)
+    _maybe_migrate()
 
 
 def get_session() -> Session:

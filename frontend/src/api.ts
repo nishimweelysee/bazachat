@@ -92,13 +92,15 @@ export async function createZone(
 
 export async function updateZone(
   zoneId: Id,
-  payload: { name?: string; capacity?: number; polygonPoints?: Array<[number, number]> },
+  payload: { name?: string; capacity?: number; capacity_mode?: 'manual' | 'auto'; density_per_m2?: number; polygonPoints?: Array<[number, number]> },
 ): Promise<{ updated: boolean }> {
   return await http(`/zones/${zoneId}`, {
     method: 'PUT',
     body: JSON.stringify({
       ...(payload.name !== undefined ? { name: payload.name } : {}),
       ...(payload.capacity !== undefined ? { capacity: payload.capacity } : {}),
+      ...(payload.capacity_mode !== undefined ? { capacity_mode: payload.capacity_mode } : {}),
+      ...(payload.density_per_m2 !== undefined ? { density_per_m2: payload.density_per_m2 } : {}),
       ...(payload.polygonPoints ? { polygon: { points: payload.polygonPoints } } : {}),
     }),
   })
@@ -109,6 +111,14 @@ export async function computeZoneCapacity(
   densityPerM2: number,
 ): Promise<{ zone_id: Id; area_m2: number; density_per_m2: number; capacity: number }> {
   return await http(`/zones/${zoneId}/compute-capacity`, { method: 'POST', body: JSON.stringify({ density_per_m2: densityPerM2 }) })
+}
+
+export async function getVenueSummaryBreakdown(
+  venueId: Id,
+  configId?: Id | null,
+): Promise<{ levels: Array<any>; sections: Array<any> }> {
+  const q = configId ? `?config_id=${configId}` : ''
+  return await http(`/venues/${venueId}/summary-breakdown${q}`)
 }
 
 export async function generateSeats(
