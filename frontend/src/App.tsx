@@ -764,17 +764,57 @@ function App() {
     return snap({ x: (pos.x - pan.x) / scale, y: (pos.y - pan.y) / scale })
   }
 
+  function dist(a: Pt, b: Pt): number {
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+
+  function finishDrawing() {
+    if (tool === 'draw-pitch') {
+      if (draftPts.length >= 3) {
+        upsertPitchM.mutate(draftPts.map((p) => [p.x, p.y]))
+        setDraftPts([])
+      }
+      return
+    }
+    if (tool === 'draw-section') {
+      if (draftPts.length >= 3) setCreateSectionOpen(true)
+      return
+    }
+    if (tool === 'draw-zone') {
+      if (draftZonePts.length >= 3) setCreateZoneOpen(true)
+      return
+    }
+    if (tool === 'draw-row-line') {
+      if (draftRowPts.length >= 2) setCreateRowOpen(true)
+      return
+    }
+    if (tool === 'draw-row-arc') {
+      if (draftArcPts.length === 3) setCreateRowOpen(true)
+      return
+    }
+  }
+
   function onStageClick(e: any) {
     if (!venueId) return
     const stage = e.target.getStage()
     const p = stageToWorld(stage)
 
+    const closeTol = Math.max(0.25, gridStep * 2)
+
     if (tool === 'draw-pitch' || tool === 'draw-section') {
+      if (draftPts.length >= 3 && dist(p, draftPts[0]!) <= closeTol) {
+        finishDrawing()
+        return
+      }
       setDraftPts((prev) => [...prev, p])
       return
     }
 
     if (tool === 'draw-zone') {
+      if (draftZonePts.length >= 3 && dist(p, draftZonePts[0]!) <= closeTol) {
+        finishDrawing()
+        return
+      }
       setDraftZonePts((prev) => [...prev, p])
       return
     }
@@ -913,20 +953,7 @@ function App() {
   }
 
   function onStageDblClick() {
-    if (tool === 'draw-pitch') {
-      if (draftPts.length >= 3) {
-        upsertPitchM.mutate(draftPts.map((p) => [p.x, p.y]))
-        setDraftPts([])
-      }
-    } else if (tool === 'draw-section') {
-      if (draftPts.length >= 3) setCreateSectionOpen(true)
-    } else if (tool === 'draw-zone') {
-      if (draftZonePts.length >= 3) setCreateZoneOpen(true)
-    } else if (tool === 'draw-row-line') {
-      if (draftRowPts.length >= 2) setCreateRowOpen(true)
-    } else if (tool === 'draw-row-arc') {
-      if (draftArcPts.length === 3) setCreateRowOpen(true)
-    }
+    finishDrawing()
   }
 
   function undo() {
@@ -967,6 +994,10 @@ function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') cancelDraft()
+      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+        // finish current drawing tool
+        finishDrawing()
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         const hasDraft = (draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length) > 0
@@ -1586,7 +1617,7 @@ function App() {
             Drawing
           </Text>
           <Text size="sm" c="dimmed">
-            Click to add points, double-click to finish (pitch/section/zone/rows). Use Snap to grid for clean geometry.
+            Click to add points. Finish by double-clicking, pressing Enter, or clicking back near the first point (for polygons).
           </Text>
           <Text fw={700} mt="sm">
             Painting
