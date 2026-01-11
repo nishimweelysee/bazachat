@@ -61,6 +61,7 @@ export function CanvasView(props: {
   draftZonePts: Array<{ x: number; y: number }>
   draftRowPts: Array<{ x: number; y: number }>
   draftArcPts: Array<{ x: number; y: number }>
+  cursorWorld: { x: number; y: number } | null
 
   sections: any[]
   zones: any[]
@@ -110,6 +111,8 @@ export function CanvasView(props: {
   showMiniMap: boolean
   onCenterWorld: (x: number, y: number) => void
 }) {
+  const dash = useMemo(() => [0.45, 0.35] as number[], [])
+
   const gridLines = useMemo(() => {
     const step = Math.max(0.5, props.gridStep * 10)
     const lines: any[] = []
@@ -182,8 +185,54 @@ export function CanvasView(props: {
           {gridLines}
 
           {props.pitchPoints && <Line points={toPoints(props.pitchPoints)} closed stroke="#22c55e" strokeWidth={2} />}
-          {props.draftPts.length >= 2 && <Line points={toPoints(props.draftPts.map((p) => [p.x, p.y]))} stroke="#a78bfa" strokeWidth={2} />}
-          {props.draftZonePts.length >= 2 && <Line points={toPoints(props.draftZonePts.map((p) => [p.x, p.y]))} stroke="#34d399" strokeWidth={2} />}
+          {/* Draft previews (dashed) */}
+          {props.draftPts.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld ? [...props.draftPts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]] : props.draftPts.map((p) => [p.x, p.y]),
+              )}
+              stroke="#a78bfa"
+              strokeWidth={2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+          {(props.tool === 'draw-pitch' || props.tool === 'draw-section') && props.cursorWorld && props.draftPts.length >= 2 && (
+            <Line
+              points={[props.draftPts[0]!.x, props.draftPts[0]!.y, props.cursorWorld.x, props.cursorWorld.y]}
+              stroke="rgba(167, 139, 250, 0.55)"
+              strokeWidth={1.2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+
+          {props.draftZonePts.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld
+                  ? [...props.draftZonePts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
+                  : props.draftZonePts.map((p) => [p.x, p.y]),
+              )}
+              stroke="#34d399"
+              strokeWidth={2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+          {props.tool === 'draw-zone' && props.cursorWorld && props.draftZonePts.length >= 2 && (
+            <Line
+              points={[props.draftZonePts[0]!.x, props.draftZonePts[0]!.y, props.cursorWorld.x, props.cursorWorld.y]}
+              stroke="rgba(52, 211, 153, 0.55)"
+              strokeWidth={1.2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
 
           {props.sections.map((s) => {
             const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
@@ -251,7 +300,35 @@ export function CanvasView(props: {
               />
             ))}
 
-          {props.draftRowPts.length >= 2 && <Line points={toPoints(props.draftRowPts.map((p) => [p.x, p.y]))} stroke="#fbbf24" strokeWidth={2} />}
+          {props.draftRowPts.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld
+                  ? [...props.draftRowPts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
+                  : props.draftRowPts.map((p) => [p.x, p.y]),
+              )}
+              stroke="#fbbf24"
+              strokeWidth={2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+
+          {props.draftArcPts.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld
+                  ? [...props.draftArcPts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
+                  : props.draftArcPts.map((p) => [p.x, p.y]),
+              )}
+              stroke="#f97316"
+              strokeWidth={2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
           {props.draftArcPts.map((p, i) => <Circle key={`arcpt-${i}`} x={p.x} y={p.y} radius={0.15} fill="#f97316" />)}
 
           {props.rows.map((r) => {

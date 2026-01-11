@@ -125,6 +125,7 @@ function App() {
   const [selectMode, setSelectMode] = useState<'paint' | 'select' | null>(null)
   const [selStart, setSelStart] = useState<Pt | null>(null)
   const [selEnd, setSelEnd] = useState<Pt | null>(null)
+  const [cursorWorld, setCursorWorld] = useState<Pt | null>(null)
 
   const [selectedSeatIds, setSelectedSeatIds] = useState<Set<Id>>(new Set())
 
@@ -847,9 +848,10 @@ function App() {
   }
 
   function onMouseMove(e: any) {
-    if (!selecting) return
     const stage = e.target.getStage()
     const p = stageToWorld(stage)
+    setCursorWorld(p)
+    if (!selecting) return
     setSelEnd(p)
   }
 
@@ -1809,6 +1811,7 @@ function App() {
             draftZonePts={draftZonePts}
             draftRowPts={draftRowPts}
             draftArcPts={draftArcPts}
+            cursorWorld={cursorWorld}
             sections={sections}
             zones={zones}
             rows={rows}
