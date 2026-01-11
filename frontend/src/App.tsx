@@ -38,6 +38,10 @@ import {
   importVenuePackage,
   listVenues,
   listConfigs,
+  deleteVenue,
+  deleteLevel,
+  deleteSection,
+  deleteRow,
   snapshot,
   updateRowPath,
   updateSection,
@@ -51,6 +55,7 @@ import { polygonArea } from './geometry'
 import { TopBar } from './components/TopBar'
 import { Sidebar } from './components/Sidebar'
 import { CanvasView } from './components/CanvasView'
+import { modals } from '@mantine/modals'
 
 type Tool =
   | 'select'
@@ -1058,6 +1063,29 @@ function App() {
           onExportZonesCsv={() => exportZonesCsvM.mutate()}
           onExportManifest={() => exportManifestM.mutate()}
           onImportPackage={() => importM.mutate()}
+          onDeleteVenue={() => {
+            if (!venueId) return
+            modals.openConfirmModal({
+              title: 'Delete venue?',
+              children: (
+                <Text size="sm" c="dimmed">
+                  This will permanently delete the venue and all of its levels, sections, rows, seats, configs, overrides, and zones.
+                </Text>
+              ),
+              labels: { confirm: 'Delete venue', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deleteVenue(venueId)
+                await qc.invalidateQueries({ queryKey: ['venues'] })
+                setVenueId(null)
+                setConfigId(null)
+                setActiveLevelId(null)
+                setActiveSectionId(null)
+                setActiveRowId(null)
+                notifications.show({ message: 'Venue deleted' })
+              },
+            })
+          }}
           onToggleTheme={() => toggleColorScheme()}
           colorScheme={colorScheme}
           onHelp={() => setHelpOpen(true)}
@@ -1094,6 +1122,54 @@ function App() {
           setGridStep={setGridStep}
           onAddLevel={() => setCreateLevelOpen(true)}
           onGenerateSeats={() => setGenSeatsOpen(true)}
+          onDeleteActiveRow={() => {
+            if (!activeRowId) return
+            modals.openConfirmModal({
+              title: 'Delete row?',
+              children: <Text size="sm" c="dimmed">This will delete the row and all generated seats for it.</Text>,
+              labels: { confirm: 'Delete row', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deleteRow(activeRowId)
+                await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                setActiveRowId(null)
+                notifications.show({ message: 'Row deleted' })
+              },
+            })
+          }}
+          onDeleteActiveSection={() => {
+            if (!activeSectionId) return
+            modals.openConfirmModal({
+              title: 'Delete section?',
+              children: <Text size="sm" c="dimmed">This will delete the section, its rows, seats, and standing zones.</Text>,
+              labels: { confirm: 'Delete section', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deleteSection(activeSectionId)
+                await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                setActiveSectionId(null)
+                setActiveRowId(null)
+                notifications.show({ message: 'Section deleted' })
+              },
+            })
+          }}
+          onDeleteActiveLevel={() => {
+            if (!activeLevelId) return
+            modals.openConfirmModal({
+              title: 'Delete level?',
+              children: <Text size="sm" c="dimmed">This will delete the level and all of its sections.</Text>,
+              labels: { confirm: 'Delete level', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deleteLevel(activeLevelId)
+                await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                setActiveLevelId(null)
+                setActiveSectionId(null)
+                setActiveRowId(null)
+                notifications.show({ message: 'Level deleted' })
+              },
+            })
+          }}
           selectedSeatCount={selectedSeatIds.size}
           onBlockSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
           onKillSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}

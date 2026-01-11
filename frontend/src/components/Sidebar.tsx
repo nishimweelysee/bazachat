@@ -42,6 +42,9 @@ export function Sidebar(props: {
 
   onAddLevel: () => void
   onGenerateSeats: () => void
+  onDeleteActiveRow: () => void
+  onDeleteActiveSection: () => void
+  onDeleteActiveLevel: () => void
 
   // selection actions
   selectedSeatCount: number
@@ -117,6 +120,24 @@ export function Sidebar(props: {
         <Tooltip label="Generate seats along the active row">
           <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
             Generate seats
+          </Button>
+        </Tooltip>
+
+        <Group grow>
+          <Tooltip label="Delete the active row (and its seats)">
+            <Button color="red" variant="light" disabled={!props.activeRowId} onClick={props.onDeleteActiveRow}>
+              Delete row
+            </Button>
+          </Tooltip>
+          <Tooltip label="Delete the active section (rows, seats, zones)">
+            <Button color="red" variant="light" disabled={!props.activeSectionId} onClick={props.onDeleteActiveSection}>
+              Delete section
+            </Button>
+          </Tooltip>
+        </Group>
+        <Tooltip label="Delete the active level (all sections)">
+          <Button color="red" variant="light" disabled={!props.activeLevelId} onClick={props.onDeleteActiveLevel}>
+            Delete level
           </Button>
         </Tooltip>
 

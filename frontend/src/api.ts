@@ -180,6 +180,26 @@ export async function importVenuePackage(payload: any): Promise<{ venue_id: Id }
   return await http(`/venues/import`, { method: 'POST', body: JSON.stringify(payload) })
 }
 
+export async function deleteVenue(venueId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/venues/${venueId}`, { method: 'DELETE' })
+}
+
+export async function deleteLevel(levelId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/levels/${levelId}`, { method: 'DELETE' })
+}
+
+export async function deleteSection(sectionId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/sections/${sectionId}`, { method: 'DELETE' })
+}
+
+export async function deleteRow(rowId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/rows/${rowId}`, { method: 'DELETE' })
+}
+
+export async function deleteZone(zoneId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/zones/${zoneId}`, { method: 'DELETE' })
+}
+
 export async function downloadSeatsCsv(venueId: Id, configId?: Id | null): Promise<Blob> {
   const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
   const q = configId ? `?config_id=${configId}` : ''

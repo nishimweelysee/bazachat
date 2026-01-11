@@ -1,5 +1,5 @@
 import { ActionIcon, Anchor, Button, Group, Select, Text, Tooltip } from '@mantine/core'
-import { IconHelp, IconMoon, IconSun } from '@tabler/icons-react'
+import { IconHelp, IconMoon, IconSun, IconTrash } from '@tabler/icons-react'
 
 export function TopBar(props: {
   venues: Array<{ id: number; name: string }>
@@ -15,6 +15,7 @@ export function TopBar(props: {
   onExportZonesCsv: () => void
   onExportManifest: () => void
   onImportPackage: () => void
+  onDeleteVenue: () => void
   onToggleTheme: () => void
   colorScheme: 'light' | 'dark' | 'auto'
   onHelp: () => void
@@ -82,6 +83,12 @@ export function TopBar(props: {
         <Tooltip label="Import venue package (JSON)">
           <Button variant="subtle" onClick={props.onImportPackage}>
             Import
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Delete this venue (dangerous)">
+          <Button color="red" variant="subtle" disabled={!props.venueId} onClick={props.onDeleteVenue} leftSection={<IconTrash size={16} />}>
+            Delete
           </Button>
         </Tooltip>
 
