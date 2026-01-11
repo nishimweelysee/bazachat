@@ -2,6 +2,8 @@
 
 A lightweight seating chart management system you can run locally from the command line.
 
+For a system overview, requirements, and tools used, see `DOCUMENTATION.md`.
+
 ## Requirements
 
 - Python 3.10+ (standard library only)
