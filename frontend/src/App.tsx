@@ -42,6 +42,7 @@ import {
   deleteLevel,
   deleteSection,
   deleteRow,
+  deleteZone,
   snapshot,
   updateRowPath,
   updateSection,
@@ -1238,6 +1239,31 @@ function App() {
                 </Text>
                 <Button variant="light" onClick={() => setEditZoneOpen(true)}>
                   Edit zone
+                </Button>
+                <Button
+                  color="red"
+                  variant="light"
+                  onClick={() => {
+                    if (!selectedZoneId) return
+                    modals.openConfirmModal({
+                      title: 'Delete zone?',
+                      children: (
+                        <Text size="sm" c="dimmed">
+                          This will permanently delete the standing zone.
+                        </Text>
+                      ),
+                      labels: { confirm: 'Delete zone', cancel: 'Cancel' },
+                      confirmProps: { color: 'red' },
+                      onConfirm: async () => {
+                        await deleteZone(selectedZoneId)
+                        await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                        setSelectedZoneId(null)
+                        notifications.show({ message: 'Zone deleted' })
+                      },
+                    })
+                  }}
+                >
+                  Delete zone
                 </Button>
               </Stack>
             ) : (
