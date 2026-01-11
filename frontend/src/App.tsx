@@ -13,15 +13,18 @@ import {
   bulkUpsertOverrides,
   createZone,
   downloadSeatsCsv,
+  downloadZonesCsv,
   exportVenuePackage,
   generateSeats,
   getRowMetrics,
+  getVenueSummary,
   importVenuePackage,
   listVenues,
   listConfigs,
   snapshot,
   updateRowPath,
   updateSection,
+  updateZone,
   upsertOverride,
   upsertPitch,
   type Id,
@@ -99,6 +102,7 @@ function App() {
 
   const [hoverSeatId, setHoverSeatId] = useState<Id | null>(null)
   const [selectedSeatId, setSelectedSeatId] = useState<Id | null>(null)
+  const [selectedZoneId, setSelectedZoneId] = useState<Id | null>(null)
 
   const [selecting, setSelecting] = useState(false)
   const [selectMode, setSelectMode] = useState<'paint' | 'select' | null>(null)
@@ -154,6 +158,20 @@ function App() {
       URL.revokeObjectURL(url)
     },
     onSuccess: () => notifications.show({ message: 'CSV download started' }),
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const exportZonesCsvM = useMutation({
+    mutationFn: async () => {
+      const blob = await downloadZonesCsv(venueId!)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `venue_${venueId}_zones.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    onSuccess: () => notifications.show({ message: 'Zones CSV download started' }),
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
@@ -330,6 +348,7 @@ function App() {
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id as Id, r])), [rows])
   const sectionById = useMemo(() => new Map(sections.map((s) => [s.id as Id, s])), [sections])
   const levelById = useMemo(() => new Map(levels.map((l) => [l.id as Id, l])), [levels])
+  const zoneById = useMemo(() => new Map(zones.map((z) => [z.id as Id, z])), [zones])
 
   const seatInfo = useMemo(() => {
     if (!selectedSeatId) return null
@@ -351,6 +370,38 @@ function App() {
       level: lvl?.name,
     }
   }, [selectedSeatId, seats, rowById, sectionById, levelById, overrideBySeatId])
+
+  const zoneInfo = useMemo(() => {
+    if (!selectedZoneId) return null
+    const z = zoneById.get(selectedZoneId)
+    if (!z) return null
+    const sec = sectionById.get(z.section_id as Id)
+    const lvl = sec ? levelById.get(sec.level_id as Id) : null
+    return {
+      id: selectedZoneId,
+      name: z.name as string,
+      capacity: z.capacity as number,
+      zone_type: z.zone_type as string,
+      section: sec?.code as string | undefined,
+      level: lvl?.name as string | undefined,
+    }
+  }, [selectedZoneId, zoneById, sectionById, levelById])
+
+  const summaryQ = useQuery({
+    queryKey: ['summary', venueId, configId],
+    queryFn: () => getVenueSummary(venueId!, configId),
+    enabled: venueId !== null,
+  })
+
+  const [editZoneOpen, setEditZoneOpen] = useState(false)
+  const [editZoneName, setEditZoneName] = useState('')
+  const [editZoneCap, setEditZoneCap] = useState(0)
+
+  useEffect(() => {
+    if (!zoneInfo) return
+    setEditZoneName(zoneInfo.name)
+    setEditZoneCap(zoneInfo.capacity)
+  }, [zoneInfo])
 
   const hoverSeatInfo = useMemo(() => {
     if (!hoverSeatId) return null
@@ -688,6 +739,9 @@ function App() {
             <Button variant="subtle" disabled={!venueId} onClick={() => exportCsvM.mutate()}>
               Export CSV
             </Button>
+            <Button variant="subtle" disabled={!venueId} onClick={() => exportZonesCsvM.mutate()}>
+              Export zones CSV
+            </Button>
             <Button variant="subtle" onClick={() => importM.mutate()}>
               Import
             </Button>
@@ -927,6 +981,51 @@ function App() {
               Click a seat to inspect.
             </Text>
           )}
+
+          <Text fw={700} mt="md">
+            Venue summary
+          </Text>
+          {summaryQ.data ? (
+            <Stack gap={2}>
+              <Text size="sm" c="dimmed">
+                seats total: {summaryQ.data.seats_total}
+              </Text>
+              <Text size="sm" c="dimmed">
+                sellable: {summaryQ.data.seats_sellable} / blocked: {summaryQ.data.seats_blocked} / kill: {summaryQ.data.seats_kill}
+              </Text>
+              <Text size="sm" c="dimmed">
+                standing capacity: {summaryQ.data.standing_capacity}
+              </Text>
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              —
+            </Text>
+          )}
+
+          <Text fw={700} mt="md">
+            Zone inspector
+          </Text>
+          {zoneInfo ? (
+            <Stack gap={2}>
+              <Text size="sm">
+                <b>{zoneInfo.name}</b> ({zoneInfo.zone_type})
+              </Text>
+              <Text size="sm" c="dimmed">
+                {zoneInfo.level} / {zoneInfo.section}
+              </Text>
+              <Text size="sm" c="dimmed">
+                capacity: {zoneInfo.capacity}
+              </Text>
+              <Button variant="light" onClick={() => setEditZoneOpen(true)}>
+                Edit zone
+              </Button>
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              Click a zone to inspect.
+            </Text>
+          )}
         </Stack>
       </AppShell.Navbar>
 
@@ -981,17 +1080,49 @@ function App() {
               {/* Standing zones */}
               {zones.map((z) => {
                 const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+                const isActive = selectedZoneId === (z.id as Id)
                 return (
                   <Line
                     key={`zone-${z.id}`}
                     points={toPoints(pts)}
                     closed
-                    stroke="#34d399"
+                    stroke={isActive ? '#86efac' : '#34d399'}
                     fill="rgba(52, 211, 153, 0.15)"
-                    strokeWidth={1.5}
+                    strokeWidth={isActive ? 2.5 : 1.5}
+                    onClick={(e) => {
+                      e.cancelBubble = true
+                      setSelectedZoneId(z.id as Id)
+                      setSelectedSeatId(null)
+                    }}
                   />
                 )
               })}
+
+              {/* Active zone vertex handles */}
+              {tool === 'select' &&
+                selectedZoneId &&
+                (() => {
+                  const z = zoneById.get(selectedZoneId)
+                  if (!z) return null
+                  const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+                  return pts.map((p, idx) => (
+                    <Circle
+                      key={`zone-h-${idx}`}
+                      x={p[0]}
+                      y={p[1]}
+                      radius={0.22}
+                      fill="#34d399"
+                      draggable
+                      onDragEnd={(e) => {
+                        const sp = snap({ x: e.target.x(), y: e.target.y() })
+                        const next = pts.map((q, i): [number, number] => (i === idx ? [sp.x, sp.y] : [q[0], q[1]]))
+                        updateZone(selectedZoneId, { polygonPoints: next })
+                          .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                          .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+                      }}
+                    />
+                  ))
+                })()}
 
               {/* Draft row polyline */}
               {draftRowPts.length >= 2 && <Line points={toPoints(draftRowPts.map((p) => [p.x, p.y]))} stroke="#fbbf24" strokeWidth={2} />}
@@ -1211,6 +1342,28 @@ function App() {
             }}
           >
             Save zone
+          </Button>
+        </Stack>
+      </Modal>
+
+      <Modal opened={editZoneOpen} onClose={() => setEditZoneOpen(false)} title="Edit zone">
+        <Stack>
+          <TextInput label="Zone name" value={editZoneName} onChange={(e) => setEditZoneName(e.target.value)} />
+          <NumberInput label="Capacity" value={editZoneCap} onChange={(v) => setEditZoneCap(Number(v ?? 0))} />
+          <Button
+            disabled={!selectedZoneId}
+            onClick={() => {
+              if (!selectedZoneId) return
+              updateZone(selectedZoneId, { name: editZoneName.trim(), capacity: editZoneCap })
+                .then(() => {
+                  qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                  setEditZoneOpen(false)
+                  notifications.show({ message: 'Zone updated' })
+                })
+                .catch((e) => notifications.show({ color: 'red', message: String(e) }))
+            }}
+          >
+            Save
           </Button>
         </Stack>
       </Modal>

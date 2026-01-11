@@ -107,3 +107,5 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Arc row editing**: select an arc row and drag its 3 orange handles to reshape (start/mid/end).
 - **Standing zones**: “Draw standing zone” inside a section and save its capacity.
 - **Smart snapping**: snapping prefers nearby existing vertices/edges (plus grid).
+- **Zones CSV export**: download all standing zones and their polygons/capacities.
+- **Venue summary**: see sellable/blocked/kill counts per config + standing capacity.

@@ -90,6 +90,20 @@ export async function createZone(
   })
 }
 
+export async function updateZone(
+  zoneId: Id,
+  payload: { name?: string; capacity?: number; polygonPoints?: Array<[number, number]> },
+): Promise<{ updated: boolean }> {
+  return await http(`/zones/${zoneId}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      ...(payload.name !== undefined ? { name: payload.name } : {}),
+      ...(payload.capacity !== undefined ? { capacity: payload.capacity } : {}),
+      ...(payload.polygonPoints ? { polygon: { points: payload.polygonPoints } } : {}),
+    }),
+  })
+}
+
 export async function generateSeats(
   rowId: Id,
   payload: {
@@ -140,6 +154,24 @@ export async function downloadSeatsCsv(venueId: Id, configId?: Id | null): Promi
     throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)
   }
   return await res.blob()
+}
+
+export async function downloadZonesCsv(venueId: Id): Promise<Blob> {
+  const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+  const res = await fetch(`${API_BASE}/venues/${venueId}/zones.csv`)
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)
+  }
+  return await res.blob()
+}
+
+export async function getVenueSummary(
+  venueId: Id,
+  configId?: Id | null,
+): Promise<{ seats_total: number; seats_sellable: number; seats_blocked: number; seats_kill: number; standing_capacity: number }> {
+  const q = configId ? `?config_id=${configId}` : ''
+  return await http(`/venues/${venueId}/summary${q}`)
 }
 
 export type Snapshot = {

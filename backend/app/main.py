@@ -476,6 +476,99 @@ def export_seats_csv(venue_id: int, config_id: Optional[int] = None, session: Se
     )
 
 
+@app.get("/venues/{venue_id}/zones.csv")
+def export_zones_csv(venue_id: int, session: Session = Depends(_session)) -> Response:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_by_id = {int(l.id): l for l in levels if l.id is not None}
+    sections = session.exec(select(Section).where(Section.level_id.in_(list(level_by_id.keys())))).all() if level_by_id else []
+    section_by_id = {int(s.id): s for s in sections if s.id is not None}
+    zones = session.exec(select(Zone).where(Zone.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["venue", "level", "section", "zone_id", "zone_name", "zone_type", "capacity", "polygon"])
+    for z in zones:
+        sec = section_by_id.get(int(z.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+        w.writerow(
+            [
+                venue.name,
+                lvl.name,
+                sec.code,
+                z.id,
+                z.name,
+                getattr(z.zone_type, "value", str(z.zone_type)),
+                z.capacity,
+                z.geom_json,
+            ]
+        )
+
+    return Response(
+        content=out.getvalue(),
+        media_type="text/csv",
+        headers={"content-disposition": f'attachment; filename="venue_{venue_id}_zones.csv"'},
+    )
+
+
+@app.get("/venues/{venue_id}/summary")
+def venue_summary(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_ids = [int(l.id) for l in levels if l.id is not None]
+    sections = session.exec(select(Section).where(Section.level_id.in_(level_ids))).all() if level_ids else []
+    section_ids = [int(s.id) for s in sections if s.id is not None]
+    rows = session.exec(select(Row).where(Row.section_id.in_(section_ids))).all() if section_ids else []
+    row_ids = [int(r.id) for r in rows if r.id is not None]
+    seats = session.exec(select(Seat.id).where(Seat.row_id.in_(row_ids))).all() if row_ids else []
+    seat_ids = [int(x) for x in seats]
+
+    zones = session.exec(select(Zone).where(Zone.section_id.in_(section_ids))).all() if section_ids else []
+    standing_capacity = sum(int(z.capacity or 0) for z in zones)
+
+    overrides_by_seat: dict[int, SeatOverride] = {}
+    if config_id is not None:
+        cfg = session.get(Config, config_id)
+        if not cfg or cfg.venue_id != venue_id:
+            raise HTTPException(status_code=404, detail="config not found for this venue")
+        ovs = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
+        overrides_by_seat = {int(o.seat_id): o for o in ovs}
+
+    total = len(seat_ids)
+    sellable = 0
+    blocked = 0
+    kill = 0
+    for sid in seat_ids:
+        o = overrides_by_seat.get(sid)
+        status = (o.status if o else SeatStatus.sellable).value
+        if status == SeatStatus.blocked.value:
+            blocked += 1
+        elif status == SeatStatus.kill.value:
+            kill += 1
+        else:
+            sellable += 1
+
+    return {
+        "venue_id": venue_id,
+        "config_id": config_id,
+        "seats_total": total,
+        "seats_sellable": sellable,
+        "seats_blocked": blocked,
+        "seats_kill": kill,
+        "standing_capacity": standing_capacity,
+    }
+
+
 @app.get("/venues/{venue_id}/package")
 def export_package(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
     """
