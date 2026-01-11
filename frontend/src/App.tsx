@@ -993,11 +993,110 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = (target?.tagName || '').toLowerCase()
+      const isTyping =
+        tag === 'input' ||
+        tag === 'textarea' ||
+        (target instanceof HTMLElement && target.isContentEditable)
+
       if (e.key === 'Escape') cancelDraft()
       if (e.key === 'Enter' || e.key === 'NumpadEnter') {
         // finish current drawing tool
         finishDrawing()
       }
+
+      // Delete selected object (when not typing)
+      if (!isTyping && (e.key === 'Delete' || e.key === 'Backspace')) {
+        // Prefer the most specific selection first.
+        if (selectedZoneId) {
+          e.preventDefault()
+          modals.openConfirmModal({
+            title: 'Delete zone?',
+            children: <Text size="sm" c="dimmed">This will permanently delete the standing zone.</Text>,
+            labels: { confirm: 'Delete zone', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await deleteZone(selectedZoneId)
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              setSelectedZoneId(null)
+              notifications.show({ message: 'Zone deleted' })
+            },
+          })
+          return
+        }
+
+        if (activeRowId) {
+          e.preventDefault()
+          modals.openConfirmModal({
+            title: 'Delete row?',
+            children: <Text size="sm" c="dimmed">This will delete the row and all generated seats for it.</Text>,
+            labels: { confirm: 'Delete row', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await deleteRow(activeRowId)
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              setActiveRowId(null)
+              notifications.show({ message: 'Row deleted' })
+            },
+          })
+          return
+        }
+
+        if (activeSectionId) {
+          e.preventDefault()
+          modals.openConfirmModal({
+            title: 'Delete section?',
+            children: <Text size="sm" c="dimmed">This will delete the section, its rows, seats, and standing zones.</Text>,
+            labels: { confirm: 'Delete section', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await deleteSection(activeSectionId)
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              setActiveSectionId(null)
+              setActiveRowId(null)
+              notifications.show({ message: 'Section deleted' })
+            },
+          })
+          return
+        }
+
+        if (activeLevelId) {
+          e.preventDefault()
+          modals.openConfirmModal({
+            title: 'Delete level?',
+            children: <Text size="sm" c="dimmed">This will delete the level and all of its sections.</Text>,
+            labels: { confirm: 'Delete level', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await deleteLevel(activeLevelId)
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              setActiveLevelId(null)
+              setActiveSectionId(null)
+              setActiveRowId(null)
+              notifications.show({ message: 'Level deleted' })
+            },
+          })
+          return
+        }
+
+        if (venueId && pitchPoints?.length) {
+          e.preventDefault()
+          modals.openConfirmModal({
+            title: 'Delete pitch?',
+            children: <Text size="sm" c="dimmed">This will remove the pitch/stage polygon from the venue.</Text>,
+            labels: { confirm: 'Delete pitch', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await deletePitch(venueId)
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              notifications.show({ message: 'Pitch deleted' })
+            },
+          })
+          return
+        }
+      }
+
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         const hasDraft = (draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length) > 0
