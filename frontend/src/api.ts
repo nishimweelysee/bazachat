@@ -87,6 +87,15 @@ export async function upsertOverride(configId: Id, payload: { seat_id: Id; statu
   return await http(`/configs/${configId}/overrides`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
+export async function exportVenuePackage(venueId: Id, configId?: Id | null): Promise<any> {
+  const q = configId ? `?config_id=${configId}` : ''
+  return await http(`/venues/${venueId}/package${q}`)
+}
+
+export async function importVenuePackage(payload: any): Promise<{ venue_id: Id }> {
+  return await http(`/venues/import`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
 export type Snapshot = {
   venue_id: Id
   config_id: Id | null

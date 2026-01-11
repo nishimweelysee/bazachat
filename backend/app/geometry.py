@@ -11,6 +11,23 @@ class GeometryError(Exception):
     pass
 
 
+def polygon_centroid(poly_points: list[tuple[float, float]]) -> tuple[float, float]:
+    if len(poly_points) < 3:
+        raise GeometryError("polygon must have at least 3 points")
+    pts = poly_points
+    if pts[0] != pts[-1]:
+        pts = pts + [pts[0]]
+    poly = ShapelyPolygon(pts)
+    if poly.is_empty:
+        raise GeometryError("polygon is empty")
+    c = poly.centroid
+    return (float(c.x), float(c.y))
+
+
+def angle_deg(x1: float, y1: float, x2: float, y2: float) -> float:
+    return math.degrees(math.atan2(y2 - y1, x2 - x1))
+
+
 def polygon_contains_point(poly_points: list[tuple[float, float]], x: float, y: float) -> bool:
     if len(poly_points) < 3:
         return False

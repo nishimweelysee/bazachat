@@ -99,3 +99,4 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Draw row (arc)**: pick “Draw row (arc)”, click **3 points** (start/mid/end), then save.
 - **Generate seats**: select a row → “Generate seats”.
 - **Configurations**: create/select a config in the top bar, then “Paint blocked/kill” and click seats.
+- **Export/Import**: use the top-bar buttons to copy a JSON package to clipboard and import it into a new venue.

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
-from .geometry import GeometryError, polygon_contains_point, seats_along_path
+from .geometry import GeometryError, angle_deg, polygon_centroid, polygon_contains_point, seats_along_path
 from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue
 from .schemas import (
     ConfigCreate,
@@ -142,9 +142,20 @@ def generate_seats(row_id: int, payload: GenerateSeatsRequest, session: Session 
     section = session.get(Section, row.section_id)
     if not section:
         raise HTTPException(status_code=404, detail="section not found")
+    level = session.get(Level, section.level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="level not found")
+    pitch = session.exec(select(Pitch).where(Pitch.venue_id == level.venue_id)).first()
 
     path = json.loads(row.geom_json)
     section_poly = [(float(x), float(y)) for [x, y] in json.loads(section.geom_json)]
+    pitch_centroid = None
+    if pitch:
+        try:
+            pitch_poly = [(float(x), float(y)) for [x, y] in json.loads(pitch.geom_json)]
+            pitch_centroid = polygon_centroid(pitch_poly)
+        except Exception:
+            pitch_centroid = None
 
     try:
         points = seats_along_path(
@@ -169,13 +180,16 @@ def generate_seats(row_id: int, payload: GenerateSeatsRequest, session: Session 
     for pt in points:
         if not polygon_contains_point(section_poly, pt.x, pt.y):
             continue
+        facing = pt.tangent_deg
+        if pitch_centroid is not None:
+            facing = angle_deg(pt.x, pt.y, pitch_centroid[0], pitch_centroid[1])
         s = Seat(
             row_id=row_id,
             seat_number=seat_num,
             x_m=pt.x,
             y_m=pt.y,
             z_m=0.0,
-            facing_deg=pt.tangent_deg,
+            facing_deg=facing,
             seat_type=payload.seat_type,
         )
         session.add(s)
@@ -216,12 +230,22 @@ def upsert_override(config_id: int, payload: SeatOverrideUpsert, session: Sessio
         raise HTTPException(status_code=404, detail="seat not found")
 
     existing = session.get(SeatOverride, (config_id, payload.seat_id))
+
+    # Treat "sellable with no notes" as clearing override.
+    if payload.status == SeatStatus.sellable and (payload.notes or "") == "":
+        if existing:
+            session.delete(existing)
+            session.commit()
+            return {"deleted": True}
+        return {"noop": True}
+
     if existing:
         existing.status = payload.status
         existing.notes = payload.notes
         session.add(existing)
         session.commit()
         return {"updated": True}
+
     o = SeatOverride(config_id=config_id, seat_id=payload.seat_id, status=payload.status, notes=payload.notes)
     session.add(o)
     session.commit()
@@ -267,4 +291,152 @@ def venue_snapshot(venue_id: int, config_id: Optional[int] = None, session: Sess
         seats=[s.model_dump() for s in seats],
         overrides=[o.model_dump() for o in overrides],
     )
+
+
+@app.get("/venues/{venue_id}/package")
+def export_package(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> dict:
+    """
+    Export a portable JSON package for this venue.
+    IDs are included for reference, but import will remap them.
+    """
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    pitch = session.exec(select(Pitch).where(Pitch.venue_id == venue_id)).first()
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_ids = [l.id for l in levels if l.id is not None]
+    sections = session.exec(select(Section).where(Section.level_id.in_(level_ids))).all() if level_ids else []
+    section_ids = [s.id for s in sections if s.id is not None]
+    rows = session.exec(select(Row).where(Row.section_id.in_(section_ids))).all() if section_ids else []
+    row_ids = [r.id for r in rows if r.id is not None]
+    seats = session.exec(select(Seat).where(Seat.row_id.in_(row_ids))).all() if row_ids else []
+
+    configs = session.exec(select(Config).where(Config.venue_id == venue_id)).all()
+    overrides = []
+    if config_id is not None:
+        overrides = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
+    else:
+        cfg_ids = [c.id for c in configs if c.id is not None]
+        overrides = session.exec(select(SeatOverride).where(SeatOverride.config_id.in_(cfg_ids))).all() if cfg_ids else []
+
+    return {
+        "version": 1,
+        "venue": venue.model_dump(),
+        "pitch": ({"polygon": json.loads(pitch.geom_json)} if pitch else None),
+        "levels": [l.model_dump() for l in levels],
+        "sections": [{**s.model_dump(), "polygon": json.loads(s.geom_json)} for s in sections],
+        "rows": [{**r.model_dump(), "path": json.loads(r.geom_json)} for r in rows],
+        "seats": [s.model_dump() for s in seats],
+        "configs": [c.model_dump() for c in configs],
+        "overrides": [o.model_dump() for o in overrides],
+    }
+
+
+@app.post("/venues/import")
+def import_package(payload: dict, session: Session = Depends(_session)) -> dict:
+    """
+    Import a portable JSON package created by /venues/{id}/package.
+    Creates a NEW venue and remaps all IDs.
+    """
+    if int(payload.get("version", 0)) != 1:
+        raise HTTPException(status_code=400, detail="unsupported package version")
+
+    src_venue = payload.get("venue") or {}
+    v = Venue(
+        name=str(src_venue.get("name", "Imported venue")),
+        origin_x_m=float(src_venue.get("origin_x_m", 0.0)),
+        origin_y_m=float(src_venue.get("origin_y_m", 0.0)),
+        bearing_deg=float(src_venue.get("bearing_deg", 0.0)),
+    )
+    session.add(v)
+    session.commit()
+    session.refresh(v)
+
+    id_map_level: dict[int, int] = {}
+    id_map_section: dict[int, int] = {}
+    id_map_row: dict[int, int] = {}
+    id_map_seat: dict[int, int] = {}
+    id_map_config: dict[int, int] = {}
+
+    pitch = payload.get("pitch")
+    if pitch and pitch.get("polygon"):
+        p = Pitch(venue_id=v.id, geom_json=json.dumps(pitch["polygon"]))
+        session.add(p)
+
+    for lvl in payload.get("levels", []):
+        old_id = int(lvl.get("id"))
+        nl = Level(venue_id=v.id, name=str(lvl.get("name", "")), z_base_m=float(lvl.get("z_base_m", 0.0)))
+        session.add(nl)
+        session.commit()
+        session.refresh(nl)
+        id_map_level[old_id] = int(nl.id)
+
+    for sec in payload.get("sections", []):
+        old_id = int(sec.get("id"))
+        old_level_id = int(sec.get("level_id"))
+        ns = Section(
+            level_id=id_map_level[old_level_id],
+            code=str(sec.get("code", "")),
+            geom_json=json.dumps(sec.get("polygon") or []),
+            seat_direction=str(sec.get("seat_direction", "lr")),
+            row_direction=str(sec.get("row_direction", "front_to_back")),
+        )
+        session.add(ns)
+        session.commit()
+        session.refresh(ns)
+        id_map_section[old_id] = int(ns.id)
+
+    for row in payload.get("rows", []):
+        old_id = int(row.get("id"))
+        old_section_id = int(row.get("section_id"))
+        nr = Row(
+            section_id=id_map_section[old_section_id],
+            label=str(row.get("label", "")),
+            order_index=int(row.get("order_index", 0)),
+            geom_json=json.dumps(row.get("path") or {}),
+        )
+        session.add(nr)
+        session.commit()
+        session.refresh(nr)
+        id_map_row[old_id] = int(nr.id)
+
+    for seat in payload.get("seats", []):
+        old_id = int(seat.get("id"))
+        old_row_id = int(seat.get("row_id"))
+        ns = Seat(
+            row_id=id_map_row[old_row_id],
+            seat_number=int(seat.get("seat_number")),
+            x_m=float(seat.get("x_m")),
+            y_m=float(seat.get("y_m")),
+            z_m=float(seat.get("z_m", 0.0)),
+            facing_deg=float(seat.get("facing_deg", 0.0)),
+            seat_type=seat.get("seat_type", "standard"),
+        )
+        session.add(ns)
+        session.commit()
+        session.refresh(ns)
+        id_map_seat[old_id] = int(ns.id)
+
+    for cfg in payload.get("configs", []):
+        old_id = int(cfg.get("id"))
+        nc = Config(venue_id=v.id, name=str(cfg.get("name", "")))
+        session.add(nc)
+        session.commit()
+        session.refresh(nc)
+        id_map_config[old_id] = int(nc.id)
+
+    for ov in payload.get("overrides", []):
+        old_cfg_id = int(ov.get("config_id"))
+        old_seat_id = int(ov.get("seat_id"))
+        no = SeatOverride(
+            config_id=id_map_config[old_cfg_id],
+            seat_id=id_map_seat[old_seat_id],
+            status=ov.get("status", "sellable"),
+            notes=str(ov.get("notes", "")),
+        )
+        session.add(no)
+
+    session.commit()
+    return {"venue_id": v.id}
 

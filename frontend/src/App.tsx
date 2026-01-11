@@ -9,7 +9,9 @@ import {
   createRow,
   createSection,
   createVenue,
+  exportVenuePackage,
   generateSeats,
+  importVenuePackage,
   listVenues,
   listConfigs,
   snapshot,
@@ -20,7 +22,15 @@ import {
 } from './api'
 import { arcFrom3Points, type Pt } from './geometry'
 
-type Tool = 'select' | 'draw-pitch' | 'draw-section' | 'draw-row-line' | 'draw-row-arc' | 'paint-blocked' | 'paint-kill'
+type Tool =
+  | 'select'
+  | 'draw-pitch'
+  | 'draw-section'
+  | 'draw-row-line'
+  | 'draw-row-arc'
+  | 'paint-blocked'
+  | 'paint-kill'
+  | 'paint-sellable'
 
 function toPoints(arr: Array<[number, number]>): number[] {
   const out: number[] = []
@@ -71,6 +81,9 @@ function App() {
   const [draftRowPts, setDraftRowPts] = useState<Pt[]>([])
   const [draftArcPts, setDraftArcPts] = useState<Pt[]>([])
 
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [gridStep, setGridStep] = useState(0.1)
+
   const [pan, setPan] = useState({ x: 450, y: 350 })
   const [scale, setScale] = useState(1)
 
@@ -96,6 +109,31 @@ function App() {
   const [endOffset, setEndOffset] = useState(0.2)
   const [seatStart, setSeatStart] = useState(1)
   const [overwriteSeats, setOverwriteSeats] = useState(true)
+
+  const exportM = useMutation({
+    mutationFn: () => exportVenuePackage(venueId!, configId),
+    onSuccess: async (pkg) => {
+      await navigator.clipboard.writeText(JSON.stringify(pkg, null, 2))
+      notifications.show({ message: 'Export copied to clipboard (JSON)' })
+    },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const importM = useMutation({
+    mutationFn: async () => {
+      const txt = prompt('Paste venue package JSON here')
+      if (!txt) throw new Error('No JSON provided')
+      const pkg = JSON.parse(txt)
+      return await importVenuePackage(pkg)
+    },
+    onSuccess: async (r) => {
+      await qc.invalidateQueries({ queryKey: ['venues'] })
+      setVenueId(r.venue_id)
+      setConfigId(null)
+      notifications.show({ message: 'Imported into new venue' })
+    },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
 
   const createVenueM = useMutation({
     mutationFn: () => createVenue({ name: newVenueName.trim() }),
@@ -243,10 +281,16 @@ function App() {
     .filter((r) => (activeSectionId ? r.section_id === activeSectionId : true))
     .map((r) => ({ value: String(r.id), label: r.label }))
 
+  function snap(p: Pt): Pt {
+    if (!snapEnabled) return p
+    const step = Math.max(0.001, gridStep)
+    return { x: Math.round(p.x / step) * step, y: Math.round(p.y / step) * step }
+  }
+
   function stageToWorld(stage: any): Pt {
     const pos = stage.getPointerPosition()
     if (!pos) return { x: 0, y: 0 }
-    return { x: (pos.x - pan.x) / scale, y: (pos.y - pan.y) / scale }
+    return snap({ x: (pos.x - pan.x) / scale, y: (pos.y - pan.y) / scale })
   }
 
   function onStageClick(e: any) {
@@ -283,6 +327,18 @@ function App() {
     } else if (tool === 'draw-row-arc') {
       if (draftArcPts.length === 3) setCreateRowOpen(true)
     }
+  }
+
+  function undo() {
+    if (tool === 'draw-pitch' || tool === 'draw-section') setDraftPts((p) => p.slice(0, -1))
+    if (tool === 'draw-row-line') setDraftRowPts((p) => p.slice(0, -1))
+    if (tool === 'draw-row-arc') setDraftArcPts((p) => p.slice(0, -1))
+  }
+
+  function cancelDraft() {
+    setDraftPts([])
+    setDraftRowPts([])
+    setDraftArcPts([])
   }
 
   function onWheel(e: any) {
@@ -357,6 +413,12 @@ function App() {
             <Button variant="light" onClick={() => setCreateVenueOpen(true)}>
               New venue
             </Button>
+            <Button variant="subtle" disabled={!venueId} onClick={() => exportM.mutate()}>
+              Export
+            </Button>
+            <Button variant="subtle" onClick={() => importM.mutate()}>
+              Import
+            </Button>
           </Group>
         </Group>
       </AppShell.Header>
@@ -411,6 +473,16 @@ function App() {
             </Button>
           </Group>
           <Group grow>
+            <Button variant="light" onClick={undo} disabled={(draftPts.length + draftRowPts.length + draftArcPts.length) === 0}>
+              Undo
+            </Button>
+            <Button variant="light" onClick={cancelDraft} disabled={(draftPts.length + draftRowPts.length + draftArcPts.length) === 0}>
+              Cancel
+            </Button>
+          </Group>
+          <Switch label="Snap to grid" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} />
+          <NumberInput label="Grid step (m)" value={gridStep} onChange={(v) => setGridStep(Number(v ?? 0.1))} decimalScale={3} />
+          <Group grow>
             <Button
               variant={tool === 'draw-section' ? 'filled' : 'light'}
               disabled={!activeLevelId}
@@ -460,6 +532,11 @@ function App() {
             </Button>
             <Button variant={tool === 'paint-kill' ? 'filled' : 'light'} disabled={!configId} onClick={() => setTool('paint-kill')}>
               Paint kill
+            </Button>
+          </Group>
+          <Group grow>
+            <Button variant={tool === 'paint-sellable' ? 'filled' : 'light'} disabled={!configId} onClick={() => setTool('paint-sellable')}>
+              Paint sellable
             </Button>
           </Group>
           <Text size="sm" c="dimmed">
@@ -564,6 +641,7 @@ function App() {
                       e.cancelBubble = true
                       if (tool === 'paint-blocked' && configId) overrideM.mutate({ seat_id: seatId, status: 'blocked' })
                       if (tool === 'paint-kill' && configId) overrideM.mutate({ seat_id: seatId, status: 'kill' })
+                      if (tool === 'paint-sellable' && configId) overrideM.mutate({ seat_id: seatId, status: 'sellable' })
                     }}
                   />
                 )
