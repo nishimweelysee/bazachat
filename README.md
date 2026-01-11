@@ -114,3 +114,4 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Manifest export**: download a single `manifest.csv` for a config (summary + seats + zones).
 - **Auto zone capacity**: set a zone to auto mode so capacity stays synced when the polygon changes.
 - **Summary breakdown**: per-section totals (sellable/blocked/kill + standing capacity) for the active config.
+- **Breakdown table**: switch between sections/levels, filter, and sort.

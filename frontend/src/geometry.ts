@@ -50,6 +50,17 @@ export function polygonCentroid(points: Array<[number, number]>): Pt | null {
   return { x: cx * factor, y: cy * factor }
 }
 
+export function polygonArea(points: Array<[number, number]>): number {
+  if (points.length < 3) return 0
+  let area2 = 0
+  for (let i = 0; i < points.length; i++) {
+    const [x0, y0] = points[i]!
+    const [x1, y1] = points[(i + 1) % points.length]!
+    area2 += x0 * y1 - x1 * y0
+  }
+  return Math.abs(area2) / 2
+}
+
 // Create an arc segment from 3 points (start, mid, end).
 // Returns null if the points are collinear / circle can't be determined.
 export function arcFrom3Points(a: Pt, b: Pt, c: Pt):

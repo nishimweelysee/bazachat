@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Anchor, AppShell, Button, Group, Modal, NumberInput, Select, Stack, Switch, Text, TextInput } from '@mantine/core'
+import { Anchor, AppShell, Button, Group, Modal, NumberInput, Select, Stack, Switch, Table, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useElementSize } from '@mantine/hooks'
 import { useEffect, useMemo, useState } from 'react'
@@ -34,6 +34,7 @@ import {
   type PathSeg,
 } from './api'
 import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonCentroid, type Pt } from './geometry'
+import { polygonArea } from './geometry'
 
 type Tool =
   | 'select'
@@ -423,6 +424,10 @@ function App() {
   const [densityPerM2, setDensityPerM2] = useState(2.0)
   const [zoneAuto, setZoneAuto] = useState(false)
 
+  const [breakdownView, setBreakdownView] = useState<'sections' | 'levels'>('sections')
+  const [breakdownFilter, setBreakdownFilter] = useState('')
+  const [breakdownSort, setBreakdownSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
+
   useEffect(() => {
     if (!zoneInfo) return
     setEditZoneName(zoneInfo.name)
@@ -431,6 +436,44 @@ function App() {
     setZoneAuto((z?.capacity_mode ?? 'manual') === 'auto')
     setDensityPerM2(Number(z?.density_per_m2 ?? 2.0))
   }, [zoneInfo])
+
+  const zoneAutoPreview = useMemo(() => {
+    if (!selectedZoneId) return null
+    const z = zoneById.get(selectedZoneId) as any
+    if (!z) return null
+    let pts: Array<[number, number]> | null = null
+    try {
+      pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+    } catch {
+      pts = null
+    }
+    if (!pts) return null
+    const area = polygonArea(pts)
+    const cap = Math.max(0, Math.round(area * Number(densityPerM2 || 0)))
+    return { area_m2: area, computed_capacity: cap }
+  }, [selectedZoneId, zoneById, densityPerM2])
+
+  const breakdownRows = useMemo(() => {
+    const data = breakdownQ.data as any
+    if (!data) return []
+    const raw = breakdownView === 'sections' ? (data.sections as any[]) : (data.levels as any[])
+    const q = breakdownFilter.trim().toLowerCase()
+    const filtered = q
+      ? raw.filter((r) => {
+          const name =
+            breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name ?? r.level_name ?? r.level_name ?? r.level_name ?? r.level_name}`
+          return String(name).toLowerCase().includes(q)
+        })
+      : raw
+    const getName = (r: any) => (breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`)
+    const getNum = (r: any, k: string) => Number(r[k] ?? 0)
+    const dir = breakdownSort.dir === 'asc' ? 1 : -1
+    const key = breakdownSort.key
+    return [...filtered].sort((a, b) => {
+      if (key === 'name') return dir * getName(a).localeCompare(getName(b))
+      return dir * (getNum(a, key) - getNum(b, key))
+    })
+  }, [breakdownQ.data, breakdownView, breakdownFilter, breakdownSort])
 
   const hoverSeatInfo = useMemo(() => {
     if (!hoverSeatId) return null
@@ -1038,22 +1081,75 @@ function App() {
           <Text fw={700} mt="md">
             Breakdown (sections)
           </Text>
+          <Select
+            label="View"
+            data={[
+              { value: 'sections', label: 'Sections' },
+              { value: 'levels', label: 'Levels' },
+            ]}
+            value={breakdownView}
+            onChange={(v) => setBreakdownView((v as any) ?? 'sections')}
+          />
+          <TextInput label="Filter" value={breakdownFilter} onChange={(e) => setBreakdownFilter(e.target.value)} placeholder="e.g. Lower/101" />
           {breakdownQ.data ? (
-            <Stack gap={2}>
-              {(breakdownQ.data.sections as any[]).slice(0, 12).map((s, i) => (
-                <Text key={`sec-sum-${i}`} size="sm" c="dimmed">
-                  {s.level_name}/{s.section_code}: sellable {s.sellable}, blocked {s.blocked}, kill {s.kill}, standing {s.standing_capacity}
-                </Text>
-              ))}
-              {(breakdownQ.data.sections as any[]).length > 12 && (
-                <Text size="sm" c="dimmed">
-                  …and {(breakdownQ.data.sections as any[]).length - 12} more
-                </Text>
-              )}
-            </Stack>
+            <Table withColumnBorders withRowBorders={false} striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setBreakdownSort((s) => ({ key: 'name', dir: s.key === 'name' && s.dir === 'asc' ? 'desc' : 'asc' }))}
+                  >
+                    Name
+                  </Table.Th>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setBreakdownSort((s) => ({ key: 'sellable', dir: s.key === 'sellable' && s.dir === 'asc' ? 'desc' : 'asc' }))}
+                  >
+                    Sellable
+                  </Table.Th>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setBreakdownSort((s) => ({ key: 'blocked', dir: s.key === 'blocked' && s.dir === 'asc' ? 'desc' : 'asc' }))}
+                  >
+                    Blocked
+                  </Table.Th>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setBreakdownSort((s) => ({ key: 'kill', dir: s.key === 'kill' && s.dir === 'asc' ? 'desc' : 'asc' }))}
+                  >
+                    Kill
+                  </Table.Th>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setBreakdownSort((s) => ({ key: 'standing_capacity', dir: s.key === 'standing_capacity' && s.dir === 'asc' ? 'desc' : 'asc' }))}
+                  >
+                    Standing
+                  </Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {breakdownRows.slice(0, 30).map((r: any, i: number) => {
+                  const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
+                  return (
+                    <Table.Tr key={`br-${i}`}>
+                      <Table.Td>{name}</Table.Td>
+                      <Table.Td>{r.sellable}</Table.Td>
+                      <Table.Td>{r.blocked}</Table.Td>
+                      <Table.Td>{r.kill}</Table.Td>
+                      <Table.Td>{r.standing_capacity}</Table.Td>
+                    </Table.Tr>
+                  )
+                })}
+              </Table.Tbody>
+            </Table>
           ) : (
             <Text size="sm" c="dimmed">
               —
+            </Text>
+          )}
+          {breakdownRows.length > 30 && (
+            <Text size="sm" c="dimmed">
+              Showing first 30 rows (filter to narrow).
             </Text>
           )}
 
@@ -1416,9 +1512,14 @@ function App() {
       <Modal opened={editZoneOpen} onClose={() => setEditZoneOpen(false)} title="Edit zone">
         <Stack>
           <TextInput label="Zone name" value={editZoneName} onChange={(e) => setEditZoneName(e.target.value)} />
-          <NumberInput label="Capacity" value={editZoneCap} onChange={(v) => setEditZoneCap(Number(v ?? 0))} />
+          <NumberInput label="Capacity" value={editZoneCap} onChange={(v) => setEditZoneCap(Number(v ?? 0))} disabled={zoneAuto} />
           <NumberInput label="Density (people / m²)" value={densityPerM2} onChange={(v) => setDensityPerM2(Number(v ?? 0))} decimalScale={2} />
           <Switch label="Auto capacity (area × density)" checked={zoneAuto} onChange={(e) => setZoneAuto(e.currentTarget.checked)} />
+          {zoneAutoPreview && (
+            <Text size="sm" c="dimmed">
+              auto preview: area {zoneAutoPreview.area_m2.toFixed(1)} m² → capacity {zoneAutoPreview.computed_capacity}
+            </Text>
+          )}
           <Button
             variant="light"
             disabled={!selectedZoneId}
@@ -1441,9 +1542,9 @@ function App() {
               if (!selectedZoneId) return
               updateZone(selectedZoneId, {
                 name: editZoneName.trim(),
-                capacity: editZoneCap,
                 capacity_mode: zoneAuto ? 'auto' : 'manual',
                 density_per_m2: densityPerM2,
+                ...(zoneAuto ? {} : { capacity: editZoneCap }),
               })
                 .then(() => {
                   qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
