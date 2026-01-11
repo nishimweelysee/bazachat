@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
-from .geometry import GeometryError, angle_deg, polygon_centroid, polygon_contains_point, seats_along_path
+from .geometry import GeometryError, angle_deg, path_total_length, polygon_centroid, polygon_contains_point, seats_along_path
 from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue
 from .schemas import (
     ConfigCreate,
@@ -20,9 +20,12 @@ from .schemas import (
     LevelCreate,
     PitchUpsert,
     RowCreate,
+    RowMetrics,
+    RowUpdate,
     SeatOverrideUpsert,
     SeatOverrideBulkUpsert,
     SectionCreate,
+    SectionUpdate,
     Snapshot,
     VenueCreate,
 )
@@ -121,6 +124,21 @@ def create_section(level_id: int, payload: SectionCreate, session: Session = Dep
     return {"id": s.id, "code": s.code}
 
 
+@app.put("/sections/{section_id}")
+def update_section(section_id: int, payload: SectionUpdate, session: Session = Depends(_session)) -> dict:
+    sec = session.get(Section, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="section not found")
+    sec.geom_json = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+    if payload.seat_direction is not None:
+        sec.seat_direction = payload.seat_direction
+    if payload.row_direction is not None:
+        sec.row_direction = payload.row_direction
+    session.add(sec)
+    session.commit()
+    return {"updated": True}
+
+
 @app.post("/sections/{section_id}/rows")
 def create_row(section_id: int, payload: RowCreate, session: Session = Depends(_session)) -> dict:
     sec = session.get(Section, section_id)
@@ -136,6 +154,35 @@ def create_row(section_id: int, payload: RowCreate, session: Session = Depends(_
     session.commit()
     session.refresh(r)
     return {"id": r.id, "label": r.label}
+
+
+@app.put("/rows/{row_id}")
+def update_row(row_id: int, payload: RowUpdate, session: Session = Depends(_session)) -> dict:
+    row = session.get(Row, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="row not found")
+    if payload.label is not None:
+        row.label = payload.label
+    if payload.order_index is not None:
+        row.order_index = payload.order_index
+    if payload.path is not None:
+        row.geom_json = payload.path.model_dump_json()
+    session.add(row)
+    session.commit()
+    return {"updated": True}
+
+
+@app.get("/rows/{row_id}/metrics", response_model=RowMetrics)
+def row_metrics(row_id: int, session: Session = Depends(_session)) -> RowMetrics:
+    row = session.get(Row, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="row not found")
+    try:
+        path = json.loads(row.geom_json)
+        L = float(path_total_length(path))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return RowMetrics(row_id=row_id, total_length_m=L)
 
 
 @app.post("/rows/{row_id}/generate-seats")

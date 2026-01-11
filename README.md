@@ -101,4 +101,5 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Configurations**: create/select a config in the top bar, then “Paint blocked/kill” and click seats.
 - **Export/Import**: use the top-bar buttons to copy a JSON package to clipboard and import it into a new venue.
 - **Bulk paint**: with a config selected, drag a rectangle on the canvas to paint many seats at once.
+- **Shift-select**: with a config selected, **shift-drag** to add seats to a selection, then apply Block/Kill/Clear to the whole selection.
 - **Export CSV**: downloads `seats.csv` including effective status per config.

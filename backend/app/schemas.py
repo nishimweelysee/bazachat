@@ -46,6 +46,8 @@ PathSeg = Annotated[Union[LineSeg, ArcSeg], Field(discriminator="type")]
 
 class Path(BaseModel):
     segments: list[PathSeg] = Field(min_length=1)
+    # Optional skip intervals along the path length (meters), used for aisles/vomitories.
+    gaps: list[tuple[float, float]] = Field(default_factory=list)
 
 
 class VenueCreate(BaseModel):
@@ -75,6 +77,23 @@ class RowCreate(BaseModel):
     label: str
     order_index: int = 0
     path: Path
+
+
+class SectionUpdate(BaseModel):
+    polygon: Polygon
+    seat_direction: Optional[str] = None
+    row_direction: Optional[str] = None
+
+
+class RowUpdate(BaseModel):
+    label: Optional[str] = None
+    order_index: Optional[int] = None
+    path: Optional[Path] = None
+
+
+class RowMetrics(BaseModel):
+    row_id: int
+    total_length_m: float
 
 
 class GenerateSeatsRequest(BaseModel):

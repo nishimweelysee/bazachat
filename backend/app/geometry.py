@@ -173,10 +173,30 @@ def seats_along_path(
     usable = L - start_offset_m - end_offset_m
     if usable <= 0:
         return []
+    gaps = path.get("gaps") or []
+    norm_gaps: list[tuple[float, float]] = []
+    try:
+        for g in gaps:
+            a = float(g[0])
+            b = float(g[1])
+            lo = min(a, b)
+            hi = max(a, b)
+            norm_gaps.append((lo, hi))
+        norm_gaps.sort()
+    except Exception as e:  # noqa: BLE001
+        raise GeometryError(f"invalid gaps format: {e}") from e
+
+    def in_gap(d: float) -> bool:
+        for (a, b) in norm_gaps:
+            if a <= d <= b:
+                return True
+        return False
+
     out: list[EvalResult] = []
     d = start_offset_m
     while d <= (L - end_offset_m) + 1e-9:
-        out.append(eval_path_at_distance(path, d))
+        if not in_gap(d):
+            out.append(eval_path_at_distance(path, d))
         d += seat_pitch_m
     return out
 

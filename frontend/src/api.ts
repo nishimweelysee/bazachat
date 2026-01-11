@@ -48,6 +48,13 @@ export async function createSection(
   })
 }
 
+export async function updateSection(sectionId: Id, polygonPoints: Array<[number, number]>): Promise<{ updated: boolean }> {
+  return await http(`/sections/${sectionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ polygon: { points: polygonPoints } }),
+  })
+}
+
 export type PathSeg =
   | { type: 'line'; x1: number; y1: number; x2: number; y2: number }
   | { type: 'arc'; cx: number; cy: number; r: number; start_deg: number; end_deg: number; cw: boolean }
@@ -58,8 +65,19 @@ export async function createRow(
 ): Promise<{ id: Id; label: string }> {
   return await http(`/sections/${sectionId}/rows`, {
     method: 'POST',
-    body: JSON.stringify({ label: payload.label, order_index: payload.order_index, path: { segments: payload.segments } }),
+    body: JSON.stringify({ label: payload.label, order_index: payload.order_index, path: { segments: payload.segments, gaps: [] } }),
   })
+}
+
+export async function updateRowPath(rowId: Id, payload: { segments: PathSeg[]; gaps: Array<[number, number]> }): Promise<{ updated: boolean }> {
+  return await http(`/rows/${rowId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ path: { segments: payload.segments, gaps: payload.gaps } }),
+  })
+}
+
+export async function getRowMetrics(rowId: Id): Promise<{ row_id: Id; total_length_m: number }> {
+  return await http(`/rows/${rowId}/metrics`)
 }
 
 export async function generateSeats(

@@ -3,7 +3,7 @@ import { Anchor, AppShell, Button, Group, Modal, NumberInput, Select, Stack, Swi
 import { notifications } from '@mantine/notifications'
 import { useElementSize } from '@mantine/hooks'
 import { useEffect, useMemo, useState } from 'react'
-import { Circle, Layer, Line, Rect, Stage } from 'react-konva'
+import { Circle, Layer, Line, Rect, Stage, Text as KText } from 'react-konva'
 import {
   createConfig,
   createLevel,
@@ -14,10 +14,13 @@ import {
   downloadSeatsCsv,
   exportVenuePackage,
   generateSeats,
+  getRowMetrics,
   importVenuePackage,
   listVenues,
   listConfigs,
   snapshot,
+  updateRowPath,
+  updateSection,
   upsertOverride,
   upsertPitch,
   type Id,
@@ -91,13 +94,15 @@ function App() {
   const [pan, setPan] = useState({ x: 450, y: 350 })
   const [scale, setScale] = useState(1)
 
-  // reserved for future hover UI (tooltips)
-  const [, setHoverSeatId] = useState<Id | null>(null)
+  const [hoverSeatId, setHoverSeatId] = useState<Id | null>(null)
   const [selectedSeatId, setSelectedSeatId] = useState<Id | null>(null)
 
   const [selecting, setSelecting] = useState(false)
+  const [selectMode, setSelectMode] = useState<'paint' | 'select' | null>(null)
   const [selStart, setSelStart] = useState<Pt | null>(null)
   const [selEnd, setSelEnd] = useState<Pt | null>(null)
+
+  const [selectedSeatIds, setSelectedSeatIds] = useState<Set<Id>>(new Set())
 
   const [createVenueOpen, setCreateVenueOpen] = useState(false)
   const [newVenueName, setNewVenueName] = useState('')
@@ -286,6 +291,14 @@ function App() {
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
+  const [gapStartM, setGapStartM] = useState(0)
+  const [gapEndM, setGapEndM] = useState(0.5)
+  const rowMetricsQ = useQuery({
+    queryKey: ['row-metrics', activeRowId],
+    queryFn: () => getRowMetrics(activeRowId!),
+    enabled: activeRowId !== null,
+  })
+
   useEffect(() => {
     // Reset config selection when switching venues
     setConfigId(null)
@@ -330,6 +343,17 @@ function App() {
       level: lvl?.name,
     }
   }, [selectedSeatId, seats, rowById, sectionById, levelById, overrideBySeatId])
+
+  const hoverSeatInfo = useMemo(() => {
+    if (!hoverSeatId) return null
+    const s = seats.find((x) => (x.id as Id) === hoverSeatId)
+    if (!s) return null
+    const r = rowById.get(s.row_id as Id)
+    const sec = r ? sectionById.get(r.section_id as Id) : null
+    const lvl = sec ? levelById.get(sec.level_id as Id) : null
+    const code = lvl && sec && r ? `${lvl.name}-${sec.code}-${r.label}-${s.seat_number}` : `${hoverSeatId}`
+    return { code, x: s.x_m as number, y: s.y_m as number }
+  }, [hoverSeatId, seats, rowById, sectionById, levelById])
 
   const levelOptions = levels.map((l) => ({ value: String(l.id), label: l.name }))
   const sectionOptions = sections
@@ -385,6 +409,7 @@ function App() {
     setSelecting(true)
     setSelStart(p)
     setSelEnd(p)
+    setSelectMode(e.evt.shiftKey ? 'select' : 'paint')
   }
 
   function onMouseMove(e: any) {
@@ -419,9 +444,77 @@ function App() {
     })
     const ids = filtered.map((s) => s.id as Id)
     if (ids.length === 0) return
-    const status = tool === 'paint-blocked' ? 'blocked' : tool === 'paint-kill' ? 'kill' : 'sellable'
-    bulkOverrideM.mutate({ seat_ids: ids, status })
-    notifications.show({ message: `Painted ${ids.length} seats` })
+    if (selectMode === 'select') {
+      setSelectedSeatIds((prev) => new Set([...prev, ...ids]))
+      notifications.show({ message: `Selected ${ids.length} seats (shift-drag)` })
+    } else {
+      const status = tool === 'paint-blocked' ? 'blocked' : tool === 'paint-kill' ? 'kill' : 'sellable'
+      bulkOverrideM.mutate({ seat_ids: ids, status })
+      notifications.show({ message: `Painted ${ids.length} seats` })
+    }
+    setSelectMode(null)
+  }
+
+  const activeRowPath = useMemo(() => {
+    if (!activeRowId) return null
+    const r = rows.find((x) => (x.id as Id) === activeRowId)
+    if (!r) return null
+    try {
+      return JSON.parse(r.geom_json as string) as { segments: PathSeg[]; gaps?: Array<[number, number]> }
+    } catch {
+      return null
+    }
+  }, [activeRowId, rows])
+
+  const activeRowGaps = (activeRowPath?.gaps ?? []) as Array<[number, number]>
+
+  function updateActiveRowGaps(nextGaps: Array<[number, number]>) {
+    if (!activeRowId || !activeRowPath) return
+    updateRowPath(activeRowId, { segments: activeRowPath.segments, gaps: nextGaps })
+      .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+      .catch((e) => notifications.show({ color: 'red', message: String(e) }))
+  }
+
+  // Editable handles for active section polygon
+  const activeSectionPoints = useMemo(() => {
+    if (!activeSectionId) return null
+    const sec = sections.find((s) => (s.id as Id) === activeSectionId)
+    if (!sec) return null
+    return JSON.parse(sec.geom_json as string) as Array<[number, number]>
+  }, [activeSectionId, sections])
+
+  // Editable handles for active row line vertices (only if all segments are line)
+  const activeRowLineVertices = useMemo(() => {
+    if (!activeRowPath) return null
+    const segs = activeRowPath.segments
+    if (!segs.every((s) => s.type === 'line')) return null
+    const pts: Array<[number, number]> = []
+    const first = segs[0] as any
+    pts.push([first.x1, first.y1])
+    for (const seg of segs as any[]) pts.push([seg.x2, seg.y2])
+    return pts
+  }, [activeRowPath])
+
+  function commitSectionPoint(idx: number, x: number, y: number) {
+    if (!activeSectionId || !activeSectionPoints) return
+    const next = activeSectionPoints.map((p, i): [number, number] => (i === idx ? [x, y] : [p[0], p[1]]))
+    updateSection(activeSectionId, next as Array<[number, number]>)
+      .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+      .catch((e) => notifications.show({ color: 'red', message: String(e) }))
+  }
+
+  function commitRowVertex(idx: number, x: number, y: number) {
+    if (!activeRowId || !activeRowLineVertices) return
+    const nextVerts = activeRowLineVertices.map((p, i): [number, number] => (i === idx ? [x, y] : [p[0], p[1]]))
+    const segs: PathSeg[] = []
+    for (let i = 0; i < nextVerts.length - 1; i++) {
+      const a = nextVerts[i]!
+      const b = nextVerts[i + 1]!
+      segs.push({ type: 'line', x1: a[0], y1: a[1], x2: b[0], y2: b[1] })
+    }
+    updateRowPath(activeRowId, { segments: segs, gaps: activeRowGaps })
+      .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+      .catch((e) => notifications.show({ color: 'red', message: String(e) }))
   }
 
   function onStageDblClick() {
@@ -657,6 +750,83 @@ function App() {
           </Text>
 
           <Text fw={700} mt="md">
+            Selection
+          </Text>
+          <Text size="sm" c="dimmed">
+            Shift-drag a rectangle to add seats to selection.
+          </Text>
+          <Group grow>
+            <Button
+              variant="light"
+              disabled={!configId || selectedSeatIds.size === 0}
+              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
+            >
+              Block selected
+            </Button>
+            <Button
+              variant="light"
+              disabled={!configId || selectedSeatIds.size === 0}
+              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
+            >
+              Kill selected
+            </Button>
+          </Group>
+          <Group grow>
+            <Button
+              variant="light"
+              disabled={!configId || selectedSeatIds.size === 0}
+              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
+            >
+              Clear selected
+            </Button>
+            <Button variant="light" disabled={selectedSeatIds.size === 0} onClick={() => setSelectedSeatIds(new Set())}>
+              Clear selection
+            </Button>
+          </Group>
+          <Text size="sm" c="dimmed">
+            Selected seats: {selectedSeatIds.size}
+          </Text>
+
+          <Text fw={700} mt="md">
+            Row gaps (aisles)
+          </Text>
+          <Text size="sm" c="dimmed">
+            Generated seats skip distances within gaps along the active row path.
+          </Text>
+          <Text size="sm" c="dimmed">
+            Row length: {rowMetricsQ.data ? rowMetricsQ.data.total_length_m.toFixed(2) : '—'} m
+          </Text>
+          <Group grow>
+            <NumberInput label="Gap start (m)" value={gapStartM} onChange={(v) => setGapStartM(Number(v ?? 0))} decimalScale={2} />
+            <NumberInput label="Gap end (m)" value={gapEndM} onChange={(v) => setGapEndM(Number(v ?? 0.5))} decimalScale={2} />
+          </Group>
+          <Button
+            variant="light"
+            disabled={!activeRowId || !activeRowPath}
+            onClick={() => updateActiveRowGaps([...activeRowGaps, [gapStartM, gapEndM]])}
+          >
+            Add gap
+          </Button>
+          {activeRowGaps.length ? (
+            <Stack gap={4}>
+              {activeRowGaps.map((g, idx) => (
+                <Group key={`gap-${idx}`} justify="space-between">
+                  <Text size="sm">
+                    {g[0].toFixed(2)} → {g[1].toFixed(2)} m
+                  </Text>
+                  <Button variant="subtle" onClick={() => updateActiveRowGaps(activeRowGaps.filter((_, i) => i !== idx))}>
+                    Remove
+                  </Button>
+                </Group>
+              ))}
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              No gaps.
+            </Text>
+          )}
+
+          <Text fw={700} mt="md">
             Seat inspector
           </Text>
           {seatInfo ? (
@@ -770,6 +940,7 @@ function App() {
                 const seatId = s.id as Id
                 const isInActiveRow = activeRowId !== null ? s.row_id === activeRowId : true
                 const fill = seatColor(seatId)
+                const isSelected = selectedSeatIds.has(seatId)
                 return (
                   <Circle
                     key={`seat-${seatId}`}
@@ -778,6 +949,8 @@ function App() {
                     radius={0.18}
                     fill={fill}
                     opacity={isInActiveRow ? 1 : 0.4}
+                    stroke={isSelected ? '#a78bfa' : undefined}
+                    strokeWidth={isSelected ? 0.06 : 0}
                     onMouseEnter={() => setHoverSeatId(seatId)}
                     onMouseLeave={() => setHoverSeatId((h) => (h === seatId ? null : h))}
                     onClick={(e) => {
@@ -790,6 +963,44 @@ function App() {
                   />
                 )
               })}
+
+              {/* Active section vertex handles */}
+              {tool === 'select' &&
+                activeSectionPoints?.map((p, idx) => (
+                  <Circle
+                    key={`sec-h-${idx}`}
+                    x={p[0]}
+                    y={p[1]}
+                    radius={0.22}
+                    fill="#60a5fa"
+                    draggable
+                    onDragEnd={(e) => {
+                      commitSectionPoint(idx, snap({ x: e.target.x(), y: e.target.y() }).x, snap({ x: e.target.x(), y: e.target.y() }).y)
+                    }}
+                  />
+                ))}
+
+              {/* Active row vertex handles (line-only rows) */}
+              {tool === 'select' &&
+                activeRowLineVertices?.map((p, idx) => (
+                  <Circle
+                    key={`row-h-${idx}`}
+                    x={p[0]}
+                    y={p[1]}
+                    radius={0.2}
+                    fill="#fbbf24"
+                    draggable
+                    onDragEnd={(e) => {
+                      const sp = snap({ x: e.target.x(), y: e.target.y() })
+                      commitRowVertex(idx, sp.x, sp.y)
+                    }}
+                  />
+                ))}
+
+              {/* Hover tooltip */}
+              {hoverSeatInfo && (
+                <KText x={hoverSeatInfo.x + 0.25} y={hoverSeatInfo.y + 0.25} text={hoverSeatInfo.code} fontSize={0.25} fill="#e2e8f0" />
+              )}
 
               {/* Selection rectangle */}
               {selecting && selStart && selEnd && (
