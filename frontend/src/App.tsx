@@ -1,9 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Anchor, AppShell, Button, Group, Modal, NumberInput, Select, Stack, Switch, Table, Text, TextInput } from '@mantine/core'
+import {
+  ActionIcon,
+  Anchor,
+  AppShell,
+  Badge,
+  Button,
+  Divider,
+  Group,
+  Modal,
+  NumberInput,
+  ScrollArea,
+  Select,
+  Slider,
+  Stack,
+  Switch,
+  Table,
+  Text,
+  TextInput,
+  Tooltip,
+  useMantineColorScheme,
+} from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useElementSize } from '@mantine/hooks'
 import { useEffect, useMemo, useState } from 'react'
 import { Circle, Layer, Line, Rect, Stage, Text as KText } from 'react-konva'
+import {
+  IconArrowsMaximize,
+  IconCircleMinus,
+  IconCirclePlus,
+  IconMoon,
+  IconSun,
+} from '@tabler/icons-react'
 import {
   createConfig,
   createLevel,
@@ -75,6 +102,7 @@ function sampleArc(seg: { cx: number; cy: number; r: number; start_deg: number; 
 function App() {
   const qc = useQueryClient()
   const { ref: stageWrapRef, width: stageW, height: stageH } = useElementSize()
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
   const venuesQ = useQuery({ queryKey: ['venues'], queryFn: listVenues })
   const [venueId, setVenueId] = useState<Id | null>(null)
   const [configId, setConfigId] = useState<Id | null>(null)
@@ -557,6 +585,27 @@ function App() {
     if (b) zoomToBounds(b)
   }
 
+  function fitToVenue() {
+    // Fit all sections; fallback to pitch; fallback to a default view.
+    const allPts: Array<[number, number]> = []
+    for (const s of sections) {
+      try {
+        const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
+        allPts.push(...pts)
+      } catch {}
+    }
+    if (allPts.length) {
+      const b = boundsFromPoints(allPts)
+      if (b) return zoomToBounds(b)
+    }
+    if (pitchPoints?.length) {
+      const b = boundsFromPoints(pitchPoints)
+      if (b) return zoomToBounds(b)
+    }
+    setScale(1)
+    setPan({ x: stageW / 2, y: stageH / 2 })
+  }
+
   const hoverSeatInfo = useMemo(() => {
     if (!hoverSeatId) return null
     const s = seats.find((x) => (x.id as Id) === hoverSeatId)
@@ -836,6 +885,25 @@ function App() {
     })
   }
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cancelDraft()
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        undo()
+      }
+      if (e.key === '+' || e.key === '=') setScale((s) => Math.min(50, s * 1.1))
+      if (e.key === '-' || e.key === '_') setScale((s) => Math.max(0.05, s / 1.1))
+      if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.key === ')')) {
+        e.preventDefault()
+        fitToVenue()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sections, pitchPoints, stageW, stageH, tool, draftPts, draftRowPts, draftArcPts, draftZonePts])
+
   function seatColor(seatId: Id): string {
     const o = overrideBySeatId.get(seatId)
     if (!o) return '#7dd3fc'
@@ -853,7 +921,9 @@ function App() {
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Group>
-            <Text fw={700}>Venue Seating Designer</Text>
+            <Text fw={800} size="lg">
+              Venue Seating Designer
+            </Text>
             <Anchor href="http://localhost:8000/docs" target="_blank">
               API docs
             </Anchor>
@@ -902,12 +972,18 @@ function App() {
             <Button variant="subtle" onClick={() => importM.mutate()}>
               Import
             </Button>
+            <Tooltip label={colorScheme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
+              <ActionIcon variant="default" onClick={() => toggleColorScheme()} aria-label="Toggle color scheme">
+                {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+              </ActionIcon>
+            </Tooltip>
           </Group>
         </Group>
       </AppShell.Header>
 
       <AppShell.Navbar p="md">
-        <Stack gap="sm">
+        <ScrollArea h="calc(100vh - 90px)" offsetScrollbars scrollbarSize={8}>
+          <Stack gap="md">
           <Text fw={700}>Project</Text>
           <Button disabled={!venueId} onClick={() => setCreateLevelOpen(true)}>
             Add level
@@ -943,6 +1019,7 @@ function App() {
             onChange={(v) => setActiveRowId(v ? Number(v) : null)}
             disabled={!activeSectionId}
           />
+          <Divider />
 
           <Text fw={700} mt="md">
             Tools
@@ -1014,6 +1091,7 @@ function App() {
               Draw standing zone
             </Button>
           </Group>
+          <Divider />
 
           <Text fw={700} mt="md">
             Configuration paint
@@ -1037,6 +1115,8 @@ function App() {
           <Text size="sm" c="dimmed">
             Tip: double-click to finish polygons/rows.
           </Text>
+
+          <Divider />
 
           <Text fw={700} mt="md">
             Selection
@@ -1075,6 +1155,8 @@ function App() {
           <Text size="sm" c="dimmed">
             Selected seats: {selectedSeatIds.size}
           </Text>
+
+          <Divider />
 
           <Text fw={700} mt="md">
             Row gaps (aisles)
@@ -1115,6 +1197,8 @@ function App() {
             </Text>
           )}
 
+          <Divider />
+
           <Text fw={700} mt="md">
             Seat inspector
           </Text>
@@ -1139,6 +1223,8 @@ function App() {
             </Text>
           )}
 
+          <Divider />
+
           <Text fw={700} mt="md">
             Venue summary
           </Text>
@@ -1159,6 +1245,8 @@ function App() {
               —
             </Text>
           )}
+
+          <Divider />
 
           <Text fw={700} mt="md">
             Breakdown (sections)
@@ -1270,6 +1358,8 @@ function App() {
             </Text>
           )}
 
+          <Divider />
+
           <Text fw={700} mt="md">
             Zone inspector
           </Text>
@@ -1293,7 +1383,8 @@ function App() {
               Click a zone to inspect.
             </Text>
           )}
-        </Stack>
+          </Stack>
+        </ScrollArea>
       </AppShell.Navbar>
 
       <AppShell.Main>
@@ -1302,7 +1393,53 @@ function App() {
         ) : snapQ.isLoading ? (
           <Text>Loading…</Text>
         ) : (
-          <div ref={stageWrapRef} style={{ width: '100%', height: 'calc(100vh - 120px)' }}>
+          <div ref={stageWrapRef} style={{ width: '100%', height: 'calc(100vh - 120px)', position: 'relative' }}>
+            {/* Canvas controls overlay */}
+            <div
+              style={{
+                position: 'absolute',
+                top: 12,
+                left: 12,
+                zIndex: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                width: 220,
+              }}
+            >
+              <Group gap="xs" justify="space-between">
+                <Badge variant="light">{tool}</Badge>
+                <Badge variant="outline">x{scale.toFixed(2)}</Badge>
+              </Group>
+              <Group gap="xs" wrap="nowrap">
+                <Tooltip label="Zoom out (-)">
+                  <ActionIcon variant="default" onClick={() => setScale((s) => Math.max(0.05, s / 1.1))}>
+                    <IconCircleMinus size={18} />
+                  </ActionIcon>
+                </Tooltip>
+                <Slider
+                  value={Math.min(6, Math.max(0.1, scale))}
+                  min={0.1}
+                  max={6}
+                  step={0.05}
+                  onChange={(v) => setScale(v)}
+                  styles={{ root: { flex: 1 } }}
+                />
+                <Tooltip label="Zoom in (+)">
+                  <ActionIcon variant="default" onClick={() => setScale((s) => Math.min(50, s * 1.1))}>
+                    <IconCirclePlus size={18} />
+                  </ActionIcon>
+                </Tooltip>
+                <Tooltip label="Fit to venue (Ctrl/Cmd+0)">
+                  <ActionIcon variant="default" onClick={fitToVenue}>
+                    <IconArrowsMaximize size={18} />
+                  </ActionIcon>
+                </Tooltip>
+              </Group>
+              <Text size="xs" c="dimmed">
+                Shortcuts: Esc cancel, Ctrl/Cmd+Z undo, +/- zoom, Ctrl/Cmd+0 fit
+              </Text>
+            </div>
             <Stage
             width={Math.max(300, stageW)}
             height={Math.max(300, stageH)}
@@ -1320,6 +1457,24 @@ function App() {
             onDragEnd={(e) => setPan({ x: e.target.x(), y: e.target.y() })}
           >
             <Layer>
+              {/* subtle grid */}
+              {(() => {
+                const step = Math.max(0.5, gridStep * 10)
+                const lines: any[] = []
+                const w = 200
+                const h = 200
+                for (let x = -w; x <= w; x += step) {
+                  lines.push(
+                    <Line key={`gx-${x}`} points={[x, -h, x, h]} stroke="rgba(148,163,184,0.08)" strokeWidth={0.02} />
+                  )
+                }
+                for (let y = -h; y <= h; y += step) {
+                  lines.push(
+                    <Line key={`gy-${y}`} points={[-w, y, w, y]} stroke="rgba(148,163,184,0.08)" strokeWidth={0.02} />
+                  )
+                }
+                return lines
+              })()}
               {pitchPoints && <Line points={toPoints(pitchPoints)} closed stroke="#22c55e" strokeWidth={2} />}
               {draftPts.length >= 2 && <Line points={toPoints(draftPts.map((p) => [p.x, p.y]))} stroke="#a78bfa" strokeWidth={2} />}
               {draftZonePts.length >= 2 && <Line points={toPoints(draftZonePts.map((p) => [p.x, p.y]))} stroke="#34d399" strokeWidth={2} />}

@@ -117,3 +117,4 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Breakdown table**: switch between sections/levels, filter, and sort.
 - **Click-to-zoom**: clicking a breakdown row zooms the canvas to that section/level.
 - **Pagination**: breakdown table supports paging and adjustable page size.
+- **Modern UI**: theme toggle (top right), canvas zoom controls + fit button, and keyboard shortcuts.

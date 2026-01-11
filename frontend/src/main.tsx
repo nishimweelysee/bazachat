@@ -1,7 +1,7 @@
 import '@mantine/core/styles.css'
 import '@mantine/notifications/styles.css'
 
-import { MantineProvider } from '@mantine/core'
+import { localStorageColorSchemeManager, MantineProvider } from '@mantine/core'
 import { Notifications } from '@mantine/notifications'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { StrictMode } from 'react'
@@ -10,11 +10,12 @@ import './index.css'
 import App from './App.tsx'
 
 const queryClient = new QueryClient()
+const colorSchemeManager = localStorageColorSchemeManager({ key: 'venue-seating-color-scheme' })
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <MantineProvider defaultColorScheme="dark">
+      <MantineProvider defaultColorScheme="dark" colorSchemeManager={colorSchemeManager}>
         <Notifications />
         <App />
       </MantineProvider>
