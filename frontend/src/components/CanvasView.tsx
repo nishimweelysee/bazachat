@@ -3,6 +3,8 @@ import { Circle, Layer, Line, Rect, Stage, Text as KText } from 'react-konva'
 import type { Id, PathSeg } from '../api'
 import { CanvasControls } from './CanvasControls'
 import { polygonCentroid } from '../geometry'
+import { MiniMap } from './MiniMap'
+import { SelectionToolbar } from './SelectionToolbar'
 
 function toPoints(arr: Array<[number, number]>): number[] {
   const out: number[] = []
@@ -94,6 +96,19 @@ export function CanvasView(props: {
   selecting: boolean
   selStart: { x: number; y: number } | null
   selEnd: { x: number; y: number } | null
+
+  // selection toolbar
+  showSelectionToolbar: boolean
+  selectedSeatsCount: number
+  configSelected: boolean
+  onBlockSelected: () => void
+  onKillSelected: () => void
+  onClearOverridesSelected: () => void
+  onClearSelection: () => void
+
+  // minimap
+  showMiniMap: boolean
+  onCenterWorld: (x: number, y: number) => void
 }) {
   const gridLines = useMemo(() => {
     const step = Math.max(0.5, props.gridStep * 10)
@@ -117,6 +132,35 @@ export function CanvasView(props: {
         onFitSelection={props.onFitSelection}
         onResetView={props.onResetView}
       />
+
+      <SelectionToolbar
+        visible={props.showSelectionToolbar}
+        selectedSeats={props.selectedSeatsCount}
+        configSelected={props.configSelected}
+        onFitSelection={props.onFitSelection}
+        onClearSelection={props.onClearSelection}
+        onBlockSelected={props.onBlockSelected}
+        onKillSelected={props.onKillSelected}
+        onClearOverridesSelected={props.onClearOverridesSelected}
+      />
+
+      {props.showMiniMap && (
+        <MiniMap
+          pitchPoints={props.pitchPoints}
+          sectionPolys={props.sections.map((s) => {
+            try {
+              return JSON.parse(s.geom_json as string) as Array<[number, number]>
+            } catch {
+              return []
+            }
+          })}
+          viewW={Math.max(300, props.stageW)}
+          viewH={Math.max(300, props.stageH)}
+          pan={props.pan}
+          scale={props.scale}
+          onCenterWorld={props.onCenterWorld}
+        />
+      )}
 
       <Stage
         width={Math.max(300, props.stageW)}

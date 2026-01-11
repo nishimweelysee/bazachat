@@ -1366,6 +1366,19 @@ function App() {
                 .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
                 .catch((err) => notifications.show({ color: 'red', message: String(err) }))
             }}
+            showSelectionToolbar={selectedSeatIds.size > 0}
+            selectedSeatsCount={selectedSeatIds.size}
+            configSelected={Boolean(configId)}
+            onBlockSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
+            onKillSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
+            onClearOverridesSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
+            onClearSelection={() => setSelectedSeatIds(new Set())}
+            showMiniMap={true}
+            onCenterWorld={(x, y) => {
+              const vw = Math.max(300, stageW)
+              const vh = Math.max(300, stageH)
+              animateView({ scale: scaleRef.current, pan: { x: vw / 2 - x * scaleRef.current, y: vh / 2 - y * scaleRef.current } })
+            }}
           />
         )}
       </AppShell.Main>
