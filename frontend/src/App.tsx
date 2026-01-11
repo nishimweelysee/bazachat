@@ -12,8 +12,10 @@ import {
   createVenue,
   bulkUpsertOverrides,
   createZone,
+  computeZoneCapacity,
   downloadSeatsCsv,
   downloadZonesCsv,
+  downloadManifestCsv,
   exportVenuePackage,
   generateSeats,
   getRowMetrics,
@@ -30,7 +32,7 @@ import {
   type Id,
   type PathSeg,
 } from './api'
-import { arcFrom3Points, closestPointOnSegment, pointOnArc, type Pt } from './geometry'
+import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonCentroid, type Pt } from './geometry'
 
 type Tool =
   | 'select'
@@ -172,6 +174,21 @@ function App() {
       URL.revokeObjectURL(url)
     },
     onSuccess: () => notifications.show({ message: 'Zones CSV download started' }),
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const exportManifestM = useMutation({
+    mutationFn: async () => {
+      if (!configId) throw new Error('Select a config first')
+      const blob = await downloadManifestCsv(venueId!, configId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `venue_${venueId}_config_${configId}_manifest.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    onSuccess: () => notifications.show({ message: 'Manifest CSV download started' }),
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
@@ -396,6 +413,7 @@ function App() {
   const [editZoneOpen, setEditZoneOpen] = useState(false)
   const [editZoneName, setEditZoneName] = useState('')
   const [editZoneCap, setEditZoneCap] = useState(0)
+  const [densityPerM2, setDensityPerM2] = useState(2.0)
 
   useEffect(() => {
     if (!zoneInfo) return
@@ -742,6 +760,9 @@ function App() {
             <Button variant="subtle" disabled={!venueId} onClick={() => exportZonesCsvM.mutate()}>
               Export zones CSV
             </Button>
+            <Button variant="subtle" disabled={!venueId || !configId} onClick={() => exportManifestM.mutate()}>
+              Export manifest
+            </Button>
             <Button variant="subtle" onClick={() => importM.mutate()}>
               Import
             </Button>
@@ -1081,20 +1102,33 @@ function App() {
               {zones.map((z) => {
                 const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
                 const isActive = selectedZoneId === (z.id as Id)
+                const centroid = polygonCentroid(pts)
                 return (
-                  <Line
-                    key={`zone-${z.id}`}
-                    points={toPoints(pts)}
-                    closed
-                    stroke={isActive ? '#86efac' : '#34d399'}
-                    fill="rgba(52, 211, 153, 0.15)"
-                    strokeWidth={isActive ? 2.5 : 1.5}
-                    onClick={(e) => {
-                      e.cancelBubble = true
-                      setSelectedZoneId(z.id as Id)
-                      setSelectedSeatId(null)
-                    }}
-                  />
+                  <>
+                    <Line
+                      key={`zone-${z.id}`}
+                      points={toPoints(pts)}
+                      closed
+                      stroke={isActive ? '#86efac' : '#34d399'}
+                      fill="rgba(52, 211, 153, 0.15)"
+                      strokeWidth={isActive ? 2.5 : 1.5}
+                      onClick={(e) => {
+                        e.cancelBubble = true
+                        setSelectedZoneId(z.id as Id)
+                        setSelectedSeatId(null)
+                      }}
+                    />
+                    {centroid && (
+                      <KText
+                        key={`zone-label-${z.id}`}
+                        x={centroid.x}
+                        y={centroid.y}
+                        text={`${z.name} (${z.capacity})`}
+                        fontSize={0.35}
+                        fill="#a7f3d0"
+                      />
+                    )}
+                  </>
                 )
               })}
 
@@ -1350,6 +1384,23 @@ function App() {
         <Stack>
           <TextInput label="Zone name" value={editZoneName} onChange={(e) => setEditZoneName(e.target.value)} />
           <NumberInput label="Capacity" value={editZoneCap} onChange={(v) => setEditZoneCap(Number(v ?? 0))} />
+          <NumberInput label="Density (people / m²)" value={densityPerM2} onChange={(v) => setDensityPerM2(Number(v ?? 0))} decimalScale={2} />
+          <Button
+            variant="light"
+            disabled={!selectedZoneId}
+            onClick={() => {
+              if (!selectedZoneId) return
+              computeZoneCapacity(selectedZoneId, densityPerM2)
+                .then((r) => {
+                  setEditZoneCap(r.capacity)
+                  qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                  notifications.show({ message: `Computed capacity: ${r.capacity} (area ${r.area_m2.toFixed(1)} m²)` })
+                })
+                .catch((e) => notifications.show({ color: 'red', message: String(e) }))
+            }}
+          >
+            Compute capacity from area
+          </Button>
           <Button
             disabled={!selectedZoneId}
             onClick={() => {

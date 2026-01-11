@@ -11,6 +11,16 @@ class GeometryError(Exception):
     pass
 
 
+def polygon_area_m2(poly_points: list[tuple[float, float]]) -> float:
+    if len(poly_points) < 3:
+        raise GeometryError("polygon must have at least 3 points")
+    pts = poly_points
+    if pts[0] != pts[-1]:
+        pts = pts + [pts[0]]
+    poly = ShapelyPolygon(pts)
+    return float(poly.area)
+
+
 def polygon_centroid(poly_points: list[tuple[float, float]]) -> tuple[float, float]:
     if len(poly_points) < 3:
         raise GeometryError("polygon must have at least 3 points")

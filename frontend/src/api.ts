@@ -104,6 +104,13 @@ export async function updateZone(
   })
 }
 
+export async function computeZoneCapacity(
+  zoneId: Id,
+  densityPerM2: number,
+): Promise<{ zone_id: Id; area_m2: number; density_per_m2: number; capacity: number }> {
+  return await http(`/zones/${zoneId}/compute-capacity`, { method: 'POST', body: JSON.stringify({ density_per_m2: densityPerM2 }) })
+}
+
 export async function generateSeats(
   rowId: Id,
   payload: {
@@ -159,6 +166,16 @@ export async function downloadSeatsCsv(venueId: Id, configId?: Id | null): Promi
 export async function downloadZonesCsv(venueId: Id): Promise<Blob> {
   const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
   const res = await fetch(`${API_BASE}/venues/${venueId}/zones.csv`)
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)
+  }
+  return await res.blob()
+}
+
+export async function downloadManifestCsv(venueId: Id, configId: Id): Promise<Blob> {
+  const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+  const res = await fetch(`${API_BASE}/venues/${venueId}/manifest.csv?config_id=${configId}`)
   if (!res.ok) {
     const msg = await res.text().catch(() => '')
     throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)

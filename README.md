@@ -109,3 +109,6 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Smart snapping**: snapping prefers nearby existing vertices/edges (plus grid).
 - **Zones CSV export**: download all standing zones and their polygons/capacities.
 - **Venue summary**: see sellable/blocked/kill counts per config + standing capacity.
+- **Zone labels**: standing zones show name + capacity on the canvas.
+- **Capacity from area**: edit a zone and compute capacity from polygon area × density (people/m²).
+- **Manifest export**: download a single `manifest.csv` for a config (summary + seats + zones).

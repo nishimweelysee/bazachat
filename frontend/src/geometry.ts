@@ -31,6 +31,25 @@ export function closestPointOnSegment(p: Pt, a: Pt, b: Pt): Pt {
   return { x: a.x + abx * t, y: a.y + aby * t }
 }
 
+export function polygonCentroid(points: Array<[number, number]>): Pt | null {
+  // polygon centroid formula; works for non-self-intersecting polygons
+  if (points.length < 3) return null
+  let area2 = 0
+  let cx = 0
+  let cy = 0
+  for (let i = 0; i < points.length; i++) {
+    const [x0, y0] = points[i]!
+    const [x1, y1] = points[(i + 1) % points.length]!
+    const a = x0 * y1 - x1 * y0
+    area2 += a
+    cx += (x0 + x1) * a
+    cy += (y0 + y1) * a
+  }
+  if (Math.abs(area2) < 1e-12) return null
+  const factor = 1 / (3 * area2)
+  return { x: cx * factor, y: cy * factor }
+}
+
 // Create an arc segment from 3 points (start, mid, end).
 // Returns null if the points are collinear / circle can't be determined.
 export function arcFrom3Points(a: Pt, b: Pt, c: Pt):

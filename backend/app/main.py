@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
-from .geometry import GeometryError, angle_deg, path_total_length, polygon_centroid, polygon_contains_point, seats_along_path
+from .geometry import GeometryError, angle_deg, path_total_length, polygon_area_m2, polygon_centroid, polygon_contains_point, seats_along_path
 from .models import Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue, Zone
 from .schemas import (
     ConfigCreate,
@@ -769,4 +769,242 @@ def update_zone(zone_id: int, payload: ZoneUpdate, session: Session = Depends(_s
     session.add(z)
     session.commit()
     return {"updated": True}
+
+
+@app.get("/zones/{zone_id}/metrics")
+def zone_metrics(zone_id: int, session: Session = Depends(_session)) -> dict:
+    z = session.get(Zone, zone_id)
+    if not z:
+        raise HTTPException(status_code=404, detail="zone not found")
+    try:
+        poly = [(float(x), float(y)) for [x, y] in json.loads(z.geom_json)]
+        area = polygon_area_m2(poly)
+        cx, cy = polygon_centroid(poly)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"zone_id": zone_id, "area_m2": area, "centroid": [cx, cy]}
+
+
+@app.post("/zones/{zone_id}/compute-capacity")
+def zone_compute_capacity(zone_id: int, payload: dict, session: Session = Depends(_session)) -> dict:
+    """
+    Compute capacity from polygon area × density (people / m^2),
+    then persist the resulting capacity back to the zone.
+    """
+    z = session.get(Zone, zone_id)
+    if not z:
+        raise HTTPException(status_code=404, detail="zone not found")
+    try:
+        density = float(payload.get("density_per_m2"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"invalid density_per_m2: {e}") from e
+    if density < 0:
+        raise HTTPException(status_code=400, detail="density_per_m2 must be >= 0")
+
+    try:
+        poly = [(float(x), float(y)) for [x, y] in json.loads(z.geom_json)]
+        area = polygon_area_m2(poly)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    capacity = int(round(area * density))
+    z.capacity = max(0, capacity)
+    session.add(z)
+    session.commit()
+    return {"zone_id": zone_id, "area_m2": area, "density_per_m2": density, "capacity": z.capacity}
+
+
+@app.get("/venues/{venue_id}/manifest.csv")
+def export_manifest_csv(venue_id: int, config_id: int, session: Session = Depends(_session)) -> Response:
+    """
+    Single CSV "event manifest" for a chosen config:
+    - summary row
+    - seats rows (effective status)
+    - zones rows (standing capacity)
+    """
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+    cfg = session.get(Config, config_id)
+    if not cfg or cfg.venue_id != venue_id:
+        raise HTTPException(status_code=404, detail="config not found for this venue")
+
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_by_id = {int(l.id): l for l in levels if l.id is not None}
+    sections = session.exec(select(Section).where(Section.level_id.in_(list(level_by_id.keys())))).all() if level_by_id else []
+    section_by_id = {int(s.id): s for s in sections if s.id is not None}
+    rows = session.exec(select(Row).where(Row.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+    row_by_id = {int(r.id): r for r in rows if r.id is not None}
+    seats = session.exec(select(Seat).where(Seat.row_id.in_(list(row_by_id.keys())))).all() if row_by_id else []
+    zones = session.exec(select(Zone).where(Zone.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+
+    ovs = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
+    overrides_by_seat = {int(o.seat_id): o for o in ovs}
+
+    # compute summary
+    total = len(seats)
+    sellable = blocked = kill = 0
+    for s in seats:
+        o = overrides_by_seat.get(int(s.id)) if s.id is not None else None
+        status = (o.status if o else SeatStatus.sellable).value
+        if status == SeatStatus.blocked.value:
+            blocked += 1
+        elif status == SeatStatus.kill.value:
+            kill += 1
+        else:
+            sellable += 1
+    standing_capacity = sum(int(z.capacity or 0) for z in zones)
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(
+        [
+            "record_type",
+            "venue",
+            "config_id",
+            "config_name",
+            "level",
+            "section",
+            "row",
+            "seat",
+            "seat_code",
+            "seat_type",
+            "seat_status",
+            "seat_notes",
+            "x_m",
+            "y_m",
+            "z_m",
+            "facing_deg",
+            "zone_id",
+            "zone_name",
+            "zone_type",
+            "zone_capacity",
+            "zone_polygon",
+            "seats_total",
+            "seats_sellable",
+            "seats_blocked",
+            "seats_kill",
+            "standing_capacity",
+        ]
+    )
+    w.writerow(
+        [
+            "summary",
+            venue.name,
+            config_id,
+            cfg.name,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            total,
+            sellable,
+            blocked,
+            kill,
+            standing_capacity,
+        ]
+    )
+
+    for s in seats:
+        r = row_by_id.get(int(s.row_id))
+        if not r:
+            continue
+        sec = section_by_id.get(int(r.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+
+        o = overrides_by_seat.get(int(s.id)) if s.id is not None else None
+        status = (o.status if o else SeatStatus.sellable).value
+        notes = o.notes if o else ""
+        seat_code = f"{lvl.name}-{sec.code}-{r.label}-{s.seat_number}"
+        w.writerow(
+            [
+                "seat",
+                venue.name,
+                config_id,
+                cfg.name,
+                lvl.name,
+                sec.code,
+                r.label,
+                s.seat_number,
+                seat_code,
+                getattr(s.seat_type, "value", str(s.seat_type)),
+                status,
+                notes,
+                s.x_m,
+                s.y_m,
+                s.z_m,
+                s.facing_deg,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+    for z in zones:
+        sec = section_by_id.get(int(z.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+        w.writerow(
+            [
+                "zone",
+                venue.name,
+                config_id,
+                cfg.name,
+                lvl.name,
+                sec.code,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                z.id,
+                z.name,
+                getattr(z.zone_type, "value", str(z.zone_type)),
+                z.capacity,
+                z.geom_json,
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+    return Response(
+        content=out.getvalue(),
+        media_type="text/csv",
+        headers={"content-disposition": f'attachment; filename="venue_{venue_id}_config_{config_id}_manifest.csv"'},
+    )
 
