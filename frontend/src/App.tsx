@@ -3,7 +3,6 @@ import {
   ActionIcon,
   Anchor,
   AppShell,
-  Badge,
   Button,
   Divider,
   Group,
@@ -11,7 +10,6 @@ import {
   NumberInput,
   ScrollArea,
   Select,
-  Slider,
   Stack,
   Switch,
   Table,
@@ -25,9 +23,7 @@ import { useElementSize } from '@mantine/hooks'
 import { useEffect, useMemo, useState } from 'react'
 import { Circle, Layer, Line, Rect, Stage, Text as KText } from 'react-konva'
 import {
-  IconArrowsMaximize,
-  IconCircleMinus,
-  IconCirclePlus,
+  IconHelp,
   IconMoon,
   IconSun,
 } from '@tabler/icons-react'
@@ -63,6 +59,7 @@ import {
 } from './api'
 import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonCentroid, type Pt } from './geometry'
 import { polygonArea } from './geometry'
+import { CanvasControls } from './components/CanvasControls'
 
 type Tool =
   | 'select'
@@ -132,6 +129,8 @@ function App() {
 
   const [pan, setPan] = useState({ x: 450, y: 350 })
   const [scale, setScale] = useState(1)
+  const [defaultView] = useState(() => ({ pan: { x: 450, y: 350 }, scale: 1 }))
+  const [helpOpen, setHelpOpen] = useState(false)
 
   const [hoverSeatId, setHoverSeatId] = useState<Id | null>(null)
   const [selectedSeatId, setSelectedSeatId] = useState<Id | null>(null)
@@ -606,6 +605,69 @@ function App() {
     setPan({ x: stageW / 2, y: stageH / 2 })
   }
 
+  function resetView() {
+    setScale(defaultView.scale)
+    setPan(defaultView.pan)
+  }
+
+  function fitToSelection() {
+    // Priority: active section -> selected zone -> selected seats -> active row
+    if (activeSectionId) {
+      const sec = sections.find((s) => (s.id as Id) === activeSectionId)
+      if (sec) {
+        try {
+          const pts = JSON.parse(sec.geom_json as string) as Array<[number, number]>
+          const b = boundsFromPoints(pts)
+          if (b) return zoomToBounds(b)
+        } catch {}
+      }
+    }
+
+    if (selectedZoneId) {
+      const z = zones.find((zz) => (zz.id as Id) === selectedZoneId)
+      if (z) {
+        try {
+          const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
+          const b = boundsFromPoints(pts)
+          if (b) return zoomToBounds(b)
+        } catch {}
+      }
+    }
+
+    if (selectedSeatIds.size > 0) {
+      const pts: Array<[number, number]> = []
+      for (const s of seats) {
+        const id = s.id as Id
+        if (!selectedSeatIds.has(id)) continue
+        pts.push([s.x_m as number, s.y_m as number])
+      }
+      const b = boundsFromPoints(pts)
+      if (b) return zoomToBounds(b)
+    }
+
+    if (activeRowId) {
+      const r = rows.find((x) => (x.id as Id) === activeRowId)
+      if (r) {
+        try {
+          const path = JSON.parse(r.geom_json as string) as { segments: any[] }
+          const pts: Array<[number, number]> = []
+          for (const seg of path.segments) {
+            if (seg.type === 'line') {
+              pts.push([seg.x1, seg.y1], [seg.x2, seg.y2])
+            } else if (seg.type === 'arc') {
+              for (let i = 0; i <= 24; i++) {
+                const p = pointOnArc(seg, i / 24)
+                pts.push([p.x, p.y])
+              }
+            }
+          }
+          const b = boundsFromPoints(pts)
+          if (b) return zoomToBounds(b)
+        } catch {}
+      }
+    }
+  }
+
   const hoverSeatInfo = useMemo(() => {
     if (!hoverSeatId) return null
     const s = seats.find((x) => (x.id as Id) === hoverSeatId)
@@ -892,6 +954,9 @@ function App() {
         e.preventDefault()
         undo()
       }
+      if (e.key === 'f' || e.key === 'F') fitToSelection()
+      if (e.key === 'r' || e.key === 'R') resetView()
+      if (e.key === '?' || (e.shiftKey && e.key === '/')) setHelpOpen(true)
       if (e.key === '+' || e.key === '=') setScale((s) => Math.min(50, s * 1.1))
       if (e.key === '-' || e.key === '_') setScale((s) => Math.max(0.05, s / 1.1))
       if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.key === ')')) {
@@ -975,6 +1040,11 @@ function App() {
             <Tooltip label={colorScheme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
               <ActionIcon variant="default" onClick={() => toggleColorScheme()} aria-label="Toggle color scheme">
                 {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label="Help / shortcuts (?)">
+              <ActionIcon variant="default" onClick={() => setHelpOpen(true)} aria-label="Help">
+                <IconHelp size={18} />
               </ActionIcon>
             </Tooltip>
           </Group>
@@ -1394,52 +1464,16 @@ function App() {
           <Text>Loading…</Text>
         ) : (
           <div ref={stageWrapRef} style={{ width: '100%', height: 'calc(100vh - 120px)', position: 'relative' }}>
-            {/* Canvas controls overlay */}
-            <div
-              style={{
-                position: 'absolute',
-                top: 12,
-                left: 12,
-                zIndex: 10,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                width: 220,
-              }}
-            >
-              <Group gap="xs" justify="space-between">
-                <Badge variant="light">{tool}</Badge>
-                <Badge variant="outline">x{scale.toFixed(2)}</Badge>
-              </Group>
-              <Group gap="xs" wrap="nowrap">
-                <Tooltip label="Zoom out (-)">
-                  <ActionIcon variant="default" onClick={() => setScale((s) => Math.max(0.05, s / 1.1))}>
-                    <IconCircleMinus size={18} />
-                  </ActionIcon>
-                </Tooltip>
-                <Slider
-                  value={Math.min(6, Math.max(0.1, scale))}
-                  min={0.1}
-                  max={6}
-                  step={0.05}
-                  onChange={(v) => setScale(v)}
-                  styles={{ root: { flex: 1 } }}
-                />
-                <Tooltip label="Zoom in (+)">
-                  <ActionIcon variant="default" onClick={() => setScale((s) => Math.min(50, s * 1.1))}>
-                    <IconCirclePlus size={18} />
-                  </ActionIcon>
-                </Tooltip>
-                <Tooltip label="Fit to venue (Ctrl/Cmd+0)">
-                  <ActionIcon variant="default" onClick={fitToVenue}>
-                    <IconArrowsMaximize size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              </Group>
-              <Text size="xs" c="dimmed">
-                Shortcuts: Esc cancel, Ctrl/Cmd+Z undo, +/- zoom, Ctrl/Cmd+0 fit
-              </Text>
-            </div>
+            <CanvasControls
+              tool={tool}
+              scale={scale}
+              onZoomIn={() => setScale((s) => Math.min(50, s * 1.1))}
+              onZoomOut={() => setScale((s) => Math.max(0.05, s / 1.1))}
+              onScaleChange={(v) => setScale(v)}
+              onFitVenue={fitToVenue}
+              onFitSelection={fitToSelection}
+              onResetView={resetView}
+            />
             <Stage
             width={Math.max(300, stageW)}
             height={Math.max(300, stageH)}
@@ -1717,6 +1751,27 @@ function App() {
           </div>
         )}
       </AppShell.Main>
+
+      <Modal opened={helpOpen} onClose={() => setHelpOpen(false)} title="Help & shortcuts" size="lg">
+        <Stack gap="xs">
+          <Text fw={700}>Keyboard</Text>
+          <Text size="sm" c="dimmed">
+            Esc = cancel draft, Ctrl/Cmd+Z = undo, +/- = zoom, Ctrl/Cmd+0 = fit venue, F = fit selection, R = reset view, ? = open this help
+          </Text>
+          <Text fw={700} mt="sm">
+            Drawing
+          </Text>
+          <Text size="sm" c="dimmed">
+            Click to add points, double-click to finish (pitch/section/zone/rows). Use Snap to grid for clean geometry.
+          </Text>
+          <Text fw={700} mt="sm">
+            Painting
+          </Text>
+          <Text size="sm" c="dimmed">
+            Drag a rectangle to paint many seats. Shift-drag to add seats to selection, then apply Block/Kill/Clear.
+          </Text>
+        </Stack>
+      </Modal>
 
       {/* Modals */}
       <Modal opened={createVenueOpen} onClose={() => setCreateVenueOpen(false)} title="Create venue">
