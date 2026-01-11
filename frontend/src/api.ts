@@ -164,6 +164,13 @@ export async function bulkUpsertOverrides(
   return await http(`/configs/${configId}/overrides/bulk`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
+export async function batchUpsertOverrides(
+  configId: Id,
+  payload: { items: Array<{ seat_id: Id; status: 'sellable' | 'blocked' | 'kill'; notes?: string }> },
+): Promise<{ deleted?: number; updated?: number; created?: number }> {
+  return await http(`/configs/${configId}/overrides/batch`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+
 export async function exportVenuePackage(venueId: Id, configId?: Id | null): Promise<any> {
   const q = configId ? `?config_id=${configId}` : ''
   return await http(`/venues/${venueId}/package${q}`)

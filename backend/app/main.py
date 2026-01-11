@@ -33,6 +33,7 @@ from .schemas import (
     RowUpdate,
     SeatOverrideUpsert,
     SeatOverrideBulkUpsert,
+    SeatOverrideBatchUpsert,
     SectionCreate,
     SectionUpdate,
     Snapshot,
@@ -60,6 +61,20 @@ def _startup() -> None:
 
 def _session() -> Session:
     return get_session()
+
+def _delete_seat_overrides_for_seat_ids(session: Session, seat_ids: list[int]) -> None:
+    if not seat_ids:
+        return
+    session.exec(delete(SeatOverride).where(SeatOverride.seat_id.in_(seat_ids)))
+
+
+def _delete_seats_for_row_ids(session: Session, row_ids: list[int]) -> None:
+    if not row_ids:
+        return
+    seat_ids = session.exec(select(Seat.id).where(Seat.row_id.in_(row_ids))).all()
+    seat_ids_int = [int(x) for x in seat_ids if x is not None]
+    _delete_seat_overrides_for_seat_ids(session, seat_ids_int)
+    session.exec(delete(Seat).where(Seat.row_id.in_(row_ids)))
 
 
 @app.get("/health")
@@ -367,6 +382,56 @@ def bulk_upsert_overrides(config_id: int, payload: SeatOverrideBulkUpsert, sessi
             created += 1
     session.commit()
     return {"updated": updated, "created": created}
+
+
+@app.put("/configs/{config_id}/overrides/batch")
+def batch_upsert_overrides(config_id: int, payload: SeatOverrideBatchUpsert, session: Session = Depends(_session)) -> dict:
+    """
+    Apply mixed override statuses in one request (used for undo/redo).
+    Semantics match single upsert: sellable + empty notes deletes override.
+    """
+    cfg = session.get(Config, config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="config not found")
+
+    seat_ids = sorted(set(int(it.seat_id) for it in payload.items))
+    existing_seats = session.exec(select(Seat.id).where(Seat.id.in_(seat_ids))).all()
+    existing_set = set(int(x) for x in existing_seats)
+    missing = [x for x in seat_ids if x not in existing_set]
+    if missing:
+        raise HTTPException(status_code=404, detail={"message": "some seats not found", "missing_seat_ids": missing[:50]})
+
+    existing = session.exec(
+        select(SeatOverride).where(SeatOverride.config_id == config_id, SeatOverride.seat_id.in_(seat_ids))
+    ).all()
+    by_seat = {int(o.seat_id): o for o in existing}
+
+    deleted = 0
+    updated = 0
+    created = 0
+    for it in payload.items:
+        sid = int(it.seat_id)
+        status = it.status
+        notes = it.notes or ""
+        cur = by_seat.get(sid)
+
+        if status == SeatStatus.sellable and notes == "":
+            if cur:
+                session.delete(cur)
+                deleted += 1
+            continue
+
+        if cur:
+            cur.status = status
+            cur.notes = notes
+            session.add(cur)
+            updated += 1
+        else:
+            session.add(SeatOverride(config_id=config_id, seat_id=sid, status=status, notes=notes))
+            created += 1
+
+    session.commit()
+    return {"deleted": deleted, "updated": updated, "created": created}
 
 
 @app.get("/venues/{venue_id}/snapshot", response_model=Snapshot)
@@ -948,6 +1013,90 @@ def update_zone(zone_id: int, payload: ZoneUpdate, session: Session = Depends(_s
     session.add(z)
     session.commit()
     return {"updated": True}
+
+
+@app.delete("/zones/{zone_id}")
+def delete_zone(zone_id: int, session: Session = Depends(_session)) -> dict:
+    z = session.get(Zone, zone_id)
+    if not z:
+        raise HTTPException(status_code=404, detail="zone not found")
+    session.delete(z)
+    session.commit()
+    return {"deleted": True}
+
+
+@app.delete("/rows/{row_id}")
+def delete_row(row_id: int, session: Session = Depends(_session)) -> dict:
+    row = session.get(Row, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="row not found")
+    _delete_seats_for_row_ids(session, [int(row_id)])
+    session.exec(delete(Row).where(Row.id == row_id))
+    session.commit()
+    return {"deleted": True}
+
+
+@app.delete("/sections/{section_id}")
+def delete_section(section_id: int, session: Session = Depends(_session)) -> dict:
+    sec = session.get(Section, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="section not found")
+
+    # zones
+    session.exec(delete(Zone).where(Zone.section_id == section_id))
+
+    # rows -> seats -> overrides
+    row_ids = session.exec(select(Row.id).where(Row.section_id == section_id)).all()
+    row_ids_int = [int(x) for x in row_ids if x is not None]
+    _delete_seats_for_row_ids(session, row_ids_int)
+    session.exec(delete(Row).where(Row.section_id == section_id))
+
+    session.exec(delete(Section).where(Section.id == section_id))
+    session.commit()
+    return {"deleted": True}
+
+
+@app.delete("/levels/{level_id}")
+def delete_level(level_id: int, session: Session = Depends(_session)) -> dict:
+    lvl = session.get(Level, level_id)
+    if not lvl:
+        raise HTTPException(status_code=404, detail="level not found")
+
+    section_ids = session.exec(select(Section.id).where(Section.level_id == level_id)).all()
+    section_ids_int = [int(x) for x in section_ids if x is not None]
+    for sid in section_ids_int:
+        delete_section(sid, session)
+
+    session.exec(delete(Level).where(Level.id == level_id))
+    session.commit()
+    return {"deleted": True}
+
+
+@app.delete("/venues/{venue_id}")
+def delete_venue(venue_id: int, session: Session = Depends(_session)) -> dict:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    # pitch
+    session.exec(delete(Pitch).where(Pitch.venue_id == venue_id))
+
+    # configs + overrides
+    cfg_ids = session.exec(select(Config.id).where(Config.venue_id == venue_id)).all()
+    cfg_ids_int = [int(x) for x in cfg_ids if x is not None]
+    if cfg_ids_int:
+        session.exec(delete(SeatOverride).where(SeatOverride.config_id.in_(cfg_ids_int)))
+        session.exec(delete(Config).where(Config.id.in_(cfg_ids_int)))
+
+    # levels -> sections -> rows -> seats -> overrides
+    level_ids = session.exec(select(Level.id).where(Level.venue_id == venue_id)).all()
+    level_ids_int = [int(x) for x in level_ids if x is not None]
+    for lid in level_ids_int:
+        delete_level(lid, session)
+
+    session.exec(delete(Venue).where(Venue.id == venue_id))
+    session.commit()
+    return {"deleted": True}
 
 
 @app.get("/zones/{zone_id}/metrics")

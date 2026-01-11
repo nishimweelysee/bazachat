@@ -23,6 +23,7 @@ import {
   createSection,
   createVenue,
   bulkUpsertOverrides,
+  batchUpsertOverrides,
   createZone,
   computeZoneCapacity,
   downloadSeatsCsv,
@@ -41,7 +42,6 @@ import {
   updateRowPath,
   updateSection,
   updateZone,
-  upsertOverride,
   upsertPitch,
   type Id,
   type PathSeg,
@@ -119,6 +119,11 @@ function App() {
   const [selEnd, setSelEnd] = useState<Pt | null>(null)
 
   const [selectedSeatIds, setSelectedSeatIds] = useState<Set<Id>>(new Set())
+
+  type OverrideStatus = 'sellable' | 'blocked' | 'kill'
+  type PaintAction = { configId: Id; before: Array<{ seat_id: Id; status: OverrideStatus }>; after: Array<{ seat_id: Id; status: OverrideStatus }> }
+  const [paintUndo, setPaintUndo] = useState<PaintAction[]>([])
+  const [paintRedo, setPaintRedo] = useState<PaintAction[]>([])
 
   const [createVenueOpen, setCreateVenueOpen] = useState(false)
   const [newVenueName, setNewVenueName] = useState('')
@@ -338,16 +343,19 @@ function App() {
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
-  const overrideM = useMutation({
-    mutationFn: (payload: { seat_id: Id; status: 'sellable' | 'blocked' | 'kill' }) => upsertOverride(configId!, payload),
+  // (single-seat override updates are handled via applyPaint now)
+
+  const bulkOverrideM = useMutation({
+    mutationFn: (payload: { seat_ids: Id[]; status: 'sellable' | 'blocked' | 'kill' }) => bulkUpsertOverrides(configId!, payload),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
     },
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
-  const bulkOverrideM = useMutation({
-    mutationFn: (payload: { seat_ids: Id[]; status: 'sellable' | 'blocked' | 'kill' }) => bulkUpsertOverrides(configId!, payload),
+  const batchOverrideM = useMutation({
+    mutationFn: (payload: { configId: Id; items: Array<{ seat_id: Id; status: OverrideStatus }> }) =>
+      batchUpsertOverrides(payload.configId, { items: payload.items }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
     },
@@ -827,8 +835,9 @@ function App() {
       notifications.show({ message: `Selected ${ids.length} seats (shift-drag)` })
     } else {
       const status = tool === 'paint-blocked' ? 'blocked' : tool === 'paint-kill' ? 'kill' : 'sellable'
-      bulkOverrideM.mutate({ seat_ids: ids, status })
-      notifications.show({ message: `Painted ${ids.length} seats` })
+      applyPaint(ids, status)
+        .then(() => notifications.show({ message: `Painted ${ids.length} seats` }))
+        .catch((e) => notifications.show({ color: 'red', message: String(e) }))
     }
     setSelectMode(null)
   }
@@ -952,7 +961,20 @@ function App() {
       if (e.key === 'Escape') cancelDraft()
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        undo()
+        const hasDraft = (draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length) > 0
+        if (hasDraft) {
+          undo()
+        } else if (paintUndo.length > 0) {
+          doUndoPaint()
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.shiftKey && (e.key === 'z' || e.key === 'Z'))) {
+        e.preventDefault()
+        if (paintRedo.length > 0) doRedoPaint()
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        if (paintRedo.length > 0) doRedoPaint()
       }
       if (e.key === 'f' || e.key === 'F') fitToSelection()
       if (e.key === 'r' || e.key === 'R') resetView()
@@ -967,7 +989,40 @@ function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections, pitchPoints, stageW, stageH, tool, draftPts, draftRowPts, draftArcPts, draftZonePts])
+  }, [sections, pitchPoints, stageW, stageH, tool, draftPts, draftRowPts, draftArcPts, draftZonePts, paintUndo, paintRedo])
+
+  function getSeatStatus(seatId: Id): OverrideStatus {
+    const o = overrideBySeatId.get(seatId)
+    return (o?.status as OverrideStatus) ?? 'sellable'
+  }
+
+  async function applyPaint(seatIds: Id[], status: OverrideStatus) {
+    if (!configId) return
+    const unique = Array.from(new Set(seatIds))
+    if (unique.length === 0) return
+    const before = unique.map((id) => ({ seat_id: id, status: getSeatStatus(id) }))
+    const after = unique.map((id) => ({ seat_id: id, status }))
+    await bulkUpsertOverrides(configId, { seat_ids: unique, status })
+    await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+    setPaintUndo((s) => [...s, { configId, before, after }])
+    setPaintRedo([])
+  }
+
+  function doUndoPaint() {
+    const last = paintUndo[paintUndo.length - 1]
+    if (!last) return
+    batchOverrideM.mutate({ configId: last.configId, items: last.before })
+    setPaintUndo((s) => s.slice(0, -1))
+    setPaintRedo((s) => [...s, last])
+  }
+
+  function doRedoPaint() {
+    const last = paintRedo[paintRedo.length - 1]
+    if (!last) return
+    batchOverrideM.mutate({ configId: last.configId, items: last.after })
+    setPaintRedo((s) => s.slice(0, -1))
+    setPaintUndo((s) => [...s, last])
+  }
 
   function seatColor(seatId: Id): string {
     const o = overrideBySeatId.get(seatId)
@@ -1288,9 +1343,9 @@ function App() {
             }}
             onSelectSeat={(seatId) => {
               setSelectedSeatId(seatId)
-              if (tool === 'paint-blocked' && configId) overrideM.mutate({ seat_id: seatId, status: 'blocked' })
-              if (tool === 'paint-kill' && configId) overrideM.mutate({ seat_id: seatId, status: 'kill' })
-              if (tool === 'paint-sellable' && configId) overrideM.mutate({ seat_id: seatId, status: 'sellable' })
+              if (tool === 'paint-blocked' && configId) applyPaint([seatId], 'blocked').catch((e) => notifications.show({ color: 'red', message: String(e) }))
+              if (tool === 'paint-kill' && configId) applyPaint([seatId], 'kill').catch((e) => notifications.show({ color: 'red', message: String(e) }))
+              if (tool === 'paint-sellable' && configId) applyPaint([seatId], 'sellable').catch((e) => notifications.show({ color: 'red', message: String(e) }))
             }}
             seatColor={seatColor}
             selecting={selecting}
@@ -1369,9 +1424,9 @@ function App() {
             showSelectionToolbar={selectedSeatIds.size > 0}
             selectedSeatsCount={selectedSeatIds.size}
             configSelected={Boolean(configId)}
-            onBlockSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
-            onKillSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
-            onClearOverridesSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
+            onBlockSelected={() => applyPaint(Array.from(selectedSeatIds), 'blocked').catch((e) => notifications.show({ color: 'red', message: String(e) }))}
+            onKillSelected={() => applyPaint(Array.from(selectedSeatIds), 'kill').catch((e) => notifications.show({ color: 'red', message: String(e) }))}
+            onClearOverridesSelected={() => applyPaint(Array.from(selectedSeatIds), 'sellable').catch((e) => notifications.show({ color: 'red', message: String(e) }))}
             onClearSelection={() => setSelectedSeatIds(new Set())}
             showMiniMap={true}
             onCenterWorld={(x, y) => {

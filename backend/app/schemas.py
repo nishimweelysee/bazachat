@@ -139,6 +139,16 @@ class SeatOverrideBulkUpsert(BaseModel):
     notes: str = ""
 
 
+class SeatOverrideBatchItem(BaseModel):
+    seat_id: int
+    status: SeatStatus
+    notes: str = ""
+
+
+class SeatOverrideBatchUpsert(BaseModel):
+    items: list[SeatOverrideBatchItem] = Field(min_length=1)
+
+
 class Snapshot(BaseModel):
     venue_id: int
     config_id: Optional[int] = None
