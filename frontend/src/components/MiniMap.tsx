@@ -1,5 +1,5 @@
 import { Paper, Text } from '@mantine/core'
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
 
@@ -94,6 +94,18 @@ export function MiniMap(props: {
     return parts.join(' ')
   }
 
+  const draggingRef = useRef(false)
+  const rafRef = useRef<number | null>(null)
+  const [, setDragPos] = useState<{ x: number; y: number } | null>(null)
+
+  const panToClient = (clientX: number, clientY: number, target: SVGSVGElement) => {
+    const rect = target.getBoundingClientRect()
+    const mx = clientX - rect.left
+    const my = clientY - rect.top
+    const world = map.miniToWorld(mx, my)
+    props.onCenterWorld(world.x, world.y)
+  }
+
   return (
     <Paper
       shadow="md"
@@ -114,12 +126,32 @@ export function MiniMap(props: {
         width={w}
         height={h}
         style={{ display: 'block', borderRadius: 8, cursor: 'pointer' }}
+        onMouseDown={(e) => {
+          draggingRef.current = true
+          setDragPos({ x: e.clientX, y: e.clientY })
+          panToClient(e.clientX, e.clientY, e.currentTarget)
+        }}
+        onMouseMove={(e) => {
+          if (!draggingRef.current) return
+          setDragPos({ x: e.clientX, y: e.clientY })
+          if (rafRef.current) return
+          rafRef.current = requestAnimationFrame(() => {
+            rafRef.current = null
+            if (!draggingRef.current) return
+            panToClient(e.clientX, e.clientY, e.currentTarget)
+          })
+        }}
+        onMouseUp={() => {
+          draggingRef.current = false
+          setDragPos(null)
+        }}
+        onMouseLeave={() => {
+          draggingRef.current = false
+          setDragPos(null)
+        }}
         onClick={(e) => {
-          const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-          const mx = e.clientX - rect.left
-          const my = e.clientY - rect.top
-          const world = map.miniToWorld(mx, my)
-          props.onCenterWorld(world.x, world.y)
+          // click-to-pan (still supported)
+          panToClient(e.clientX, e.clientY, e.currentTarget)
         }}
       >
         <rect x={0} y={0} width={w} height={h} fill="rgba(15, 23, 42, 0.35)" />

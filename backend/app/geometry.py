@@ -5,11 +5,28 @@ from dataclasses import dataclass
 from typing import Iterable, Literal, TypedDict
 
 from shapely.geometry import Point, Polygon as ShapelyPolygon
+from shapely.validation import explain_validity
 
 
 class GeometryError(Exception):
     pass
 
+
+def validate_polygon(poly_points: list[tuple[float, float]], *, name: str = "polygon") -> None:
+    if len(poly_points) < 3:
+        raise GeometryError(f"{name} must have at least 3 points")
+    pts = poly_points
+    if pts[0] != pts[-1]:
+        pts = pts + [pts[0]]
+    poly = ShapelyPolygon(pts)
+    if poly.is_empty:
+        raise GeometryError(f"{name} is empty")
+    if poly.area <= 0:
+        raise GeometryError(f"{name} area must be > 0")
+    if not poly.is_valid:
+        raise GeometryError(f"{name} is invalid: {explain_validity(poly)}")
+    if not poly.is_simple:
+        raise GeometryError(f"{name} self-intersects")
 
 def polygon_area_m2(poly_points: list[tuple[float, float]]) -> float:
     if len(poly_points) < 3:

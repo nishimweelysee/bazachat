@@ -76,37 +76,43 @@ export function Sidebar(props: {
           </Button>
         </Tooltip>
 
-        <Select
-          label="Active level"
-          data={props.levelOptions}
-          value={props.activeLevelId ? String(props.activeLevelId) : null}
-          onChange={(v) => {
-            const id = v ? Number(v) : null
-            props.setActiveLevelId(id)
-            props.setActiveSectionId(null)
-            props.setActiveRowId(null)
-          }}
-        />
+        <Tooltip label="Choose the deck/tier you’re working on">
+          <Select
+            label="Active level"
+            data={props.levelOptions}
+            value={props.activeLevelId ? String(props.activeLevelId) : null}
+            onChange={(v) => {
+              const id = v ? Number(v) : null
+              props.setActiveLevelId(id)
+              props.setActiveSectionId(null)
+              props.setActiveRowId(null)
+            }}
+          />
+        </Tooltip>
 
-        <Select
-          label="Active section"
-          data={props.sectionOptions}
-          value={props.activeSectionId ? String(props.activeSectionId) : null}
-          onChange={(v) => {
-            const id = v ? Number(v) : null
-            props.setActiveSectionId(id)
-            props.setActiveRowId(null)
-          }}
-          disabled={!props.activeLevelId}
-        />
+        <Tooltip label="Choose the section you’re editing">
+          <Select
+            label="Active section"
+            data={props.sectionOptions}
+            value={props.activeSectionId ? String(props.activeSectionId) : null}
+            onChange={(v) => {
+              const id = v ? Number(v) : null
+              props.setActiveSectionId(id)
+              props.setActiveRowId(null)
+            }}
+            disabled={!props.activeLevelId}
+          />
+        </Tooltip>
 
-        <Select
-          label="Active row"
-          data={props.rowOptions}
-          value={props.activeRowId ? String(props.activeRowId) : null}
-          onChange={(v) => props.setActiveRowId(v ? Number(v) : null)}
-          disabled={!props.activeSectionId}
-        />
+        <Tooltip label="Choose the row to generate seats or add gaps">
+          <Select
+            label="Active row"
+            data={props.rowOptions}
+            value={props.activeRowId ? String(props.activeRowId) : null}
+            onChange={(v) => props.setActiveRowId(v ? Number(v) : null)}
+            disabled={!props.activeSectionId}
+          />
+        </Tooltip>
 
         <Tooltip label="Generate seats along the active row">
           <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
@@ -145,8 +151,12 @@ export function Sidebar(props: {
           </Tooltip>
         </Group>
 
-        <Switch label="Snap to grid" checked={props.snapEnabled} onChange={(e) => props.setSnapEnabled(e.currentTarget.checked)} />
-        <NumberInput label="Grid step (m)" value={props.gridStep} onChange={(v) => props.setGridStep(Number(v ?? 0.1))} decimalScale={3} />
+        <Tooltip label="Enable snapping for precise geometry">
+          <Switch label="Snap to grid" checked={props.snapEnabled} onChange={(e) => props.setSnapEnabled(e.currentTarget.checked)} />
+        </Tooltip>
+        <Tooltip label="Grid resolution in meters (smaller = finer snap)">
+          <NumberInput label="Grid step (m)" value={props.gridStep} onChange={(v) => props.setGridStep(Number(v ?? 0.1))} decimalScale={3} />
+        </Tooltip>
 
         <Divider />
 

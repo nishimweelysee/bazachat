@@ -12,7 +12,16 @@ from fastapi.responses import Response
 from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
-from .geometry import GeometryError, angle_deg, path_total_length, polygon_area_m2, polygon_centroid, polygon_contains_point, seats_along_path
+from .geometry import (
+    GeometryError,
+    angle_deg,
+    path_total_length,
+    polygon_area_m2,
+    polygon_centroid,
+    polygon_contains_point,
+    seats_along_path,
+    validate_polygon,
+)
 from .models import CapacityMode, Config, Level, Pitch, Row, Seat, SeatOverride, Section, SeatStatus, Venue, Zone
 from .schemas import (
     ConfigCreate,
@@ -79,7 +88,12 @@ def upsert_pitch(venue_id: int, payload: PitchUpsert, session: Session = Depends
     if not venue:
         raise HTTPException(status_code=404, detail="venue not found")
 
-    geom = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+    pts = [(float(x), float(y)) for (x, y) in payload.polygon.points]
+    try:
+        validate_polygon(pts, name="pitch polygon")
+    except GeometryError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    geom = json.dumps([[x, y] for (x, y) in pts])
     existing = session.exec(select(Pitch).where(Pitch.venue_id == venue_id)).first()
     if existing:
         existing.geom_json = geom
@@ -112,7 +126,12 @@ def create_section(level_id: int, payload: SectionCreate, session: Session = Dep
     if not lvl:
         raise HTTPException(status_code=404, detail="level not found")
 
-    geom = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+    pts = [(float(x), float(y)) for (x, y) in payload.polygon.points]
+    try:
+        validate_polygon(pts, name="section polygon")
+    except GeometryError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    geom = json.dumps([[x, y] for (x, y) in pts])
     s = Section(
         level_id=level_id,
         code=payload.code,
@@ -131,7 +150,12 @@ def update_section(section_id: int, payload: SectionUpdate, session: Session = D
     sec = session.get(Section, section_id)
     if not sec:
         raise HTTPException(status_code=404, detail="section not found")
-    sec.geom_json = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+    pts = [(float(x), float(y)) for (x, y) in payload.polygon.points]
+    try:
+        validate_polygon(pts, name="section polygon")
+    except GeometryError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    sec.geom_json = json.dumps([[x, y] for (x, y) in pts])
     if payload.seat_direction is not None:
         sec.seat_direction = payload.seat_direction
     if payload.row_direction is not None:
@@ -870,6 +894,11 @@ def create_zone(section_id: int, payload: ZoneCreate, session: Session = Depends
     sec = session.get(Section, section_id)
     if not sec:
         raise HTTPException(status_code=404, detail="section not found")
+    pts = [(float(x), float(y)) for (x, y) in payload.polygon.points]
+    try:
+        validate_polygon(pts, name="zone polygon")
+    except GeometryError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     z = Zone(
         section_id=section_id,
         name=payload.name,
@@ -877,7 +906,7 @@ def create_zone(section_id: int, payload: ZoneCreate, session: Session = Depends
         capacity=payload.capacity,
         capacity_mode=payload.capacity_mode,
         density_per_m2=payload.density_per_m2,
-        geom_json=json.dumps([[x, y] for (x, y) in payload.polygon.points]),
+        geom_json=json.dumps([[x, y] for (x, y) in pts]),
     )
     session.add(z)
     session.commit()
@@ -901,7 +930,12 @@ def update_zone(zone_id: int, payload: ZoneUpdate, session: Session = Depends(_s
     if payload.density_per_m2 is not None:
         z.density_per_m2 = payload.density_per_m2
     if payload.polygon is not None:
-        z.geom_json = json.dumps([[x, y] for (x, y) in payload.polygon.points])
+        pts = [(float(x), float(y)) for (x, y) in payload.polygon.points]
+        try:
+            validate_polygon(pts, name="zone polygon")
+        except GeometryError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        z.geom_json = json.dumps([[x, y] for (x, y) in pts])
 
     # Auto capacity sync (area × density)
     if z.capacity_mode == CapacityMode.auto:
