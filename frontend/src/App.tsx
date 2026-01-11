@@ -43,6 +43,8 @@ import {
   deleteSection,
   deleteRow,
   deleteZone,
+  deleteConfig,
+  deletePitch,
   snapshot,
   updateRowPath,
   updateSection,
@@ -1087,6 +1089,25 @@ function App() {
               },
             })
           }}
+          onDeleteConfig={() => {
+            if (!configId) return
+            modals.openConfirmModal({
+              title: 'Delete config?',
+              children: (
+                <Text size="sm" c="dimmed">
+                  This will permanently delete the selected config and all its overrides (seat statuses). It will not delete seats.
+                </Text>
+              ),
+              labels: { confirm: 'Delete config', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deleteConfig(configId)
+                await qc.invalidateQueries({ queryKey: ['configs', venueId] })
+                setConfigId(null)
+                notifications.show({ message: 'Config deleted' })
+              },
+            })
+          }}
           onToggleTheme={() => toggleColorScheme()}
           colorScheme={colorScheme}
           onHelp={() => setHelpOpen(true)}
@@ -1123,6 +1144,21 @@ function App() {
           setGridStep={setGridStep}
           onAddLevel={() => setCreateLevelOpen(true)}
           onGenerateSeats={() => setGenSeatsOpen(true)}
+          hasPitch={Boolean(pitchPoints?.length)}
+          onDeletePitch={() => {
+            if (!venueId) return
+            modals.openConfirmModal({
+              title: 'Delete pitch?',
+              children: <Text size="sm" c="dimmed">This will remove the pitch/stage polygon from the venue.</Text>,
+              labels: { confirm: 'Delete pitch', cancel: 'Cancel' },
+              confirmProps: { color: 'red' },
+              onConfirm: async () => {
+                await deletePitch(venueId)
+                await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+                notifications.show({ message: 'Pitch deleted' })
+              },
+            })
+          }}
           onDeleteActiveRow={() => {
             if (!activeRowId) return
             modals.openConfirmModal({

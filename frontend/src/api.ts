@@ -200,6 +200,14 @@ export async function deleteZone(zoneId: Id): Promise<{ deleted: boolean }> {
   return await http(`/zones/${zoneId}`, { method: 'DELETE' })
 }
 
+export async function deleteConfig(configId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/configs/${configId}`, { method: 'DELETE' })
+}
+
+export async function deletePitch(venueId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/venues/${venueId}/pitch`, { method: 'DELETE' })
+}
+
 export async function downloadSeatsCsv(venueId: Id, configId?: Id | null): Promise<Blob> {
   const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
   const q = configId ? `?config_id=${configId}` : ''

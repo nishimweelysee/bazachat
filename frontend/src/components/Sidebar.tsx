@@ -45,6 +45,8 @@ export function Sidebar(props: {
   onDeleteActiveRow: () => void
   onDeleteActiveSection: () => void
   onDeleteActiveLevel: () => void
+  onDeletePitch: () => void
+  hasPitch: boolean
 
   // selection actions
   selectedSeatCount: number
@@ -120,6 +122,12 @@ export function Sidebar(props: {
         <Tooltip label="Generate seats along the active row">
           <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
             Generate seats
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Delete pitch/stage polygon">
+          <Button color="red" variant="light" disabled={!props.venueId || !props.hasPitch} onClick={props.onDeletePitch}>
+            Delete pitch
           </Button>
         </Tooltip>
 

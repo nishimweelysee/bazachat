@@ -16,6 +16,7 @@ export function TopBar(props: {
   onExportManifest: () => void
   onImportPackage: () => void
   onDeleteVenue: () => void
+  onDeleteConfig: () => void
   onToggleTheme: () => void
   colorScheme: 'light' | 'dark' | 'auto'
   onHelp: () => void
@@ -89,6 +90,18 @@ export function TopBar(props: {
         <Tooltip label="Delete this venue (dangerous)">
           <Button color="red" variant="subtle" disabled={!props.venueId} onClick={props.onDeleteVenue} leftSection={<IconTrash size={16} />}>
             Delete
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Delete selected config (dangerous)">
+          <Button
+            color="red"
+            variant="subtle"
+            disabled={!props.configId}
+            onClick={props.onDeleteConfig}
+            leftSection={<IconTrash size={16} />}
+          >
+            Delete config
           </Button>
         </Tooltip>
 

@@ -123,6 +123,16 @@ def upsert_pitch(venue_id: int, payload: PitchUpsert, session: Session = Depends
     return {"id": p.id}
 
 
+@app.delete("/venues/{venue_id}/pitch")
+def delete_pitch(venue_id: int, session: Session = Depends(_session)) -> dict:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+    session.exec(delete(Pitch).where(Pitch.venue_id == venue_id))
+    session.commit()
+    return {"deleted": True}
+
+
 @app.post("/venues/{venue_id}/levels")
 def create_level(venue_id: int, payload: LevelCreate, session: Session = Depends(_session)) -> dict:
     venue = session.get(Venue, venue_id)
@@ -310,6 +320,17 @@ def list_configs(venue_id: int, session: Session = Depends(_session)) -> list[di
         raise HTTPException(status_code=404, detail="venue not found")
     cfgs = session.exec(select(Config).where(Config.venue_id == venue_id).order_by(Config.created_at.desc())).all()
     return [{"id": c.id, "name": c.name} for c in cfgs]
+
+
+@app.delete("/configs/{config_id}")
+def delete_config(config_id: int, session: Session = Depends(_session)) -> dict:
+    cfg = session.get(Config, config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="config not found")
+    session.exec(delete(SeatOverride).where(SeatOverride.config_id == config_id))
+    session.exec(delete(Config).where(Config.id == config_id))
+    session.commit()
+    return {"deleted": True}
 
 
 @app.put("/configs/{config_id}/overrides")
