@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlmodel import Session, delete, select
 
 from .db import get_session, init_db
@@ -18,6 +21,7 @@ from .schemas import (
     PitchUpsert,
     RowCreate,
     SeatOverrideUpsert,
+    SeatOverrideBulkUpsert,
     SectionCreate,
     Snapshot,
     VenueCreate,
@@ -252,6 +256,46 @@ def upsert_override(config_id: int, payload: SeatOverrideUpsert, session: Sessio
     return {"created": True}
 
 
+@app.put("/configs/{config_id}/overrides/bulk")
+def bulk_upsert_overrides(config_id: int, payload: SeatOverrideBulkUpsert, session: Session = Depends(_session)) -> dict:
+    cfg = session.get(Config, config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="config not found")
+
+    seat_ids = sorted(set(int(x) for x in payload.seat_ids))
+    existing_seats = session.exec(select(Seat.id).where(Seat.id.in_(seat_ids))).all()
+    existing_set = set(int(x) for x in existing_seats)
+    missing = [x for x in seat_ids if x not in existing_set]
+    if missing:
+        raise HTTPException(status_code=404, detail={"message": "some seats not found", "missing_seat_ids": missing[:50]})
+
+    # Clear overrides fast when marking sellable (default) with no notes
+    if payload.status == SeatStatus.sellable and (payload.notes or "") == "":
+        session.exec(delete(SeatOverride).where(SeatOverride.config_id == config_id, SeatOverride.seat_id.in_(seat_ids)))
+        session.commit()
+        return {"deleted": len(seat_ids)}
+
+    existing = session.exec(
+        select(SeatOverride).where(SeatOverride.config_id == config_id, SeatOverride.seat_id.in_(seat_ids))
+    ).all()
+    by_seat = {int(o.seat_id): o for o in existing}
+
+    updated = 0
+    created = 0
+    for sid in seat_ids:
+        o = by_seat.get(sid)
+        if o:
+            o.status = payload.status
+            o.notes = payload.notes
+            session.add(o)
+            updated += 1
+        else:
+            session.add(SeatOverride(config_id=config_id, seat_id=sid, status=payload.status, notes=payload.notes))
+            created += 1
+    session.commit()
+    return {"updated": updated, "created": created}
+
+
 @app.get("/venues/{venue_id}/snapshot", response_model=Snapshot)
 def venue_snapshot(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> Snapshot:
     venue = session.get(Venue, venue_id)
@@ -290,6 +334,91 @@ def venue_snapshot(venue_id: int, config_id: Optional[int] = None, session: Sess
         rows=[r.model_dump() for r in rows],
         seats=[s.model_dump() for s in seats],
         overrides=[o.model_dump() for o in overrides],
+    )
+
+
+@app.get("/venues/{venue_id}/seats.csv")
+def export_seats_csv(venue_id: int, config_id: Optional[int] = None, session: Session = Depends(_session)) -> Response:
+    venue = session.get(Venue, venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="venue not found")
+
+    levels = session.exec(select(Level).where(Level.venue_id == venue_id)).all()
+    level_by_id = {int(l.id): l for l in levels if l.id is not None}
+    sections = session.exec(select(Section).where(Section.level_id.in_(list(level_by_id.keys())))).all() if level_by_id else []
+    section_by_id = {int(s.id): s for s in sections if s.id is not None}
+    rows = session.exec(select(Row).where(Row.section_id.in_(list(section_by_id.keys())))).all() if section_by_id else []
+    row_by_id = {int(r.id): r for r in rows if r.id is not None}
+    seats = session.exec(select(Seat).where(Seat.row_id.in_(list(row_by_id.keys())))).all() if row_by_id else []
+
+    overrides_by_seat: dict[int, SeatOverride] = {}
+    if config_id is not None:
+        cfg = session.get(Config, config_id)
+        if not cfg or cfg.venue_id != venue_id:
+            raise HTTPException(status_code=404, detail="config not found for this venue")
+        ovs = session.exec(select(SeatOverride).where(SeatOverride.config_id == config_id)).all()
+        overrides_by_seat = {int(o.seat_id): o for o in ovs}
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(
+        [
+            "venue",
+            "config_id",
+            "level",
+            "section",
+            "row",
+            "seat",
+            "seat_code",
+            "seat_type",
+            "status",
+            "notes",
+            "x_m",
+            "y_m",
+            "z_m",
+            "facing_deg",
+        ]
+    )
+
+    for s in seats:
+        r = row_by_id.get(int(s.row_id))
+        if not r:
+            continue
+        sec = section_by_id.get(int(r.section_id))
+        if not sec:
+            continue
+        lvl = level_by_id.get(int(sec.level_id))
+        if not lvl:
+            continue
+
+        o = overrides_by_seat.get(int(s.id)) if s.id is not None else None
+        status = (o.status if o else SeatStatus.sellable).value
+        notes = o.notes if o else ""
+        seat_code = f"{lvl.name}-{sec.code}-{r.label}-{s.seat_number}"
+
+        w.writerow(
+            [
+                venue.name,
+                config_id or "",
+                lvl.name,
+                sec.code,
+                r.label,
+                s.seat_number,
+                seat_code,
+                getattr(s.seat_type, "value", str(s.seat_type)),
+                status,
+                notes,
+                s.x_m,
+                s.y_m,
+                s.z_m,
+                s.facing_deg,
+            ]
+        )
+
+    return Response(
+        content=out.getvalue(),
+        media_type="text/csv",
+        headers={"content-disposition": f'attachment; filename="venue_{venue_id}_seats.csv"'},
     )
 
 

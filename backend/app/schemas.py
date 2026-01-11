@@ -96,6 +96,12 @@ class SeatOverrideUpsert(BaseModel):
     notes: str = ""
 
 
+class SeatOverrideBulkUpsert(BaseModel):
+    seat_ids: list[int] = Field(min_length=1)
+    status: SeatStatus
+    notes: str = ""
+
+
 class Snapshot(BaseModel):
     venue_id: int
     config_id: Optional[int] = None

@@ -87,6 +87,13 @@ export async function upsertOverride(configId: Id, payload: { seat_id: Id; statu
   return await http(`/configs/${configId}/overrides`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
+export async function bulkUpsertOverrides(
+  configId: Id,
+  payload: { seat_ids: Id[]; status: 'sellable' | 'blocked' | 'kill'; notes?: string },
+): Promise<{ updated?: number; created?: number; deleted?: number }> {
+  return await http(`/configs/${configId}/overrides/bulk`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+
 export async function exportVenuePackage(venueId: Id, configId?: Id | null): Promise<any> {
   const q = configId ? `?config_id=${configId}` : ''
   return await http(`/venues/${venueId}/package${q}`)
@@ -94,6 +101,17 @@ export async function exportVenuePackage(venueId: Id, configId?: Id | null): Pro
 
 export async function importVenuePackage(payload: any): Promise<{ venue_id: Id }> {
   return await http(`/venues/import`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function downloadSeatsCsv(venueId: Id, configId?: Id | null): Promise<Blob> {
+  const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+  const q = configId ? `?config_id=${configId}` : ''
+  const res = await fetch(`${API_BASE}/venues/${venueId}/seats.csv${q}`)
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`)
+  }
+  return await res.blob()
 }
 
 export type Snapshot = {

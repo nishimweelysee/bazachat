@@ -100,3 +100,5 @@ The UI expects the backend at `http://localhost:8000` (override with `VITE_API_B
 - **Generate seats**: select a row → “Generate seats”.
 - **Configurations**: create/select a config in the top bar, then “Paint blocked/kill” and click seats.
 - **Export/Import**: use the top-bar buttons to copy a JSON package to clipboard and import it into a new venue.
+- **Bulk paint**: with a config selected, drag a rectangle on the canvas to paint many seats at once.
+- **Export CSV**: downloads `seats.csv` including effective status per config.

@@ -1,14 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Anchor, AppShell, Button, Group, Modal, NumberInput, Select, Stack, Switch, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
+import { useElementSize } from '@mantine/hooks'
 import { useEffect, useMemo, useState } from 'react'
-import { Circle, Layer, Line, Stage } from 'react-konva'
+import { Circle, Layer, Line, Rect, Stage } from 'react-konva'
 import {
   createConfig,
   createLevel,
   createRow,
   createSection,
   createVenue,
+  bulkUpsertOverrides,
+  downloadSeatsCsv,
   exportVenuePackage,
   generateSeats,
   importVenuePackage,
@@ -58,6 +61,7 @@ function sampleArc(seg: { cx: number; cy: number; r: number; start_deg: number; 
 
 function App() {
   const qc = useQueryClient()
+  const { ref: stageWrapRef, width: stageW, height: stageH } = useElementSize()
   const venuesQ = useQuery({ queryKey: ['venues'], queryFn: listVenues })
   const [venueId, setVenueId] = useState<Id | null>(null)
   const [configId, setConfigId] = useState<Id | null>(null)
@@ -86,6 +90,14 @@ function App() {
 
   const [pan, setPan] = useState({ x: 450, y: 350 })
   const [scale, setScale] = useState(1)
+
+  // reserved for future hover UI (tooltips)
+  const [, setHoverSeatId] = useState<Id | null>(null)
+  const [selectedSeatId, setSelectedSeatId] = useState<Id | null>(null)
+
+  const [selecting, setSelecting] = useState(false)
+  const [selStart, setSelStart] = useState<Pt | null>(null)
+  const [selEnd, setSelEnd] = useState<Pt | null>(null)
 
   const [createVenueOpen, setCreateVenueOpen] = useState(false)
   const [newVenueName, setNewVenueName] = useState('')
@@ -116,6 +128,20 @@ function App() {
       await navigator.clipboard.writeText(JSON.stringify(pkg, null, 2))
       notifications.show({ message: 'Export copied to clipboard (JSON)' })
     },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const exportCsvM = useMutation({
+    mutationFn: async () => {
+      const blob = await downloadSeatsCsv(venueId!, configId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `venue_${venueId}_seats.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    onSuccess: () => notifications.show({ message: 'CSV download started' }),
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
@@ -252,6 +278,14 @@ function App() {
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
 
+  const bulkOverrideM = useMutation({
+    mutationFn: (payload: { seat_ids: Id[]; status: 'sellable' | 'blocked' | 'kill' }) => bulkUpsertOverrides(configId!, payload),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+    },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
   useEffect(() => {
     // Reset config selection when switching venues
     setConfigId(null)
@@ -272,6 +306,30 @@ function App() {
   }, [data])
 
   const overrideBySeatId = useMemo(() => new Map(overrides.map((o) => [o.seat_id as Id, o])), [overrides])
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id as Id, r])), [rows])
+  const sectionById = useMemo(() => new Map(sections.map((s) => [s.id as Id, s])), [sections])
+  const levelById = useMemo(() => new Map(levels.map((l) => [l.id as Id, l])), [levels])
+
+  const seatInfo = useMemo(() => {
+    if (!selectedSeatId) return null
+    const s = seats.find((x) => (x.id as Id) === selectedSeatId)
+    if (!s) return null
+    const r = rowById.get(s.row_id as Id)
+    const sec = r ? sectionById.get(r.section_id as Id) : null
+    const lvl = sec ? levelById.get(sec.level_id as Id) : null
+    const o = overrideBySeatId.get(selectedSeatId)
+    const code = lvl && sec && r ? `${lvl.name}-${sec.code}-${r.label}-${s.seat_number}` : `${selectedSeatId}`
+    return {
+      id: selectedSeatId,
+      code,
+      status: o?.status ?? 'sellable',
+      x: s.x_m,
+      y: s.y_m,
+      row: r?.label,
+      section: sec?.code,
+      level: lvl?.name,
+    }
+  }, [selectedSeatId, seats, rowById, sectionById, levelById, overrideBySeatId])
 
   const levelOptions = levels.map((l) => ({ value: String(l.id), label: l.name }))
   const sectionOptions = sections
@@ -312,6 +370,58 @@ function App() {
       setDraftArcPts((prev) => (prev.length >= 3 ? [p] : [...prev, p]))
       return
     }
+  }
+
+  function isPaintTool(t: Tool): t is 'paint-blocked' | 'paint-kill' | 'paint-sellable' {
+    return t === 'paint-blocked' || t === 'paint-kill' || t === 'paint-sellable'
+  }
+
+  function onMouseDown(e: any) {
+    if (!venueId) return
+    if (!configId) return
+    if (!isPaintTool(tool)) return
+    const stage = e.target.getStage()
+    const p = stageToWorld(stage)
+    setSelecting(true)
+    setSelStart(p)
+    setSelEnd(p)
+  }
+
+  function onMouseMove(e: any) {
+    if (!selecting) return
+    const stage = e.target.getStage()
+    const p = stageToWorld(stage)
+    setSelEnd(p)
+  }
+
+  function onMouseUp() {
+    if (!selecting) return
+    setSelecting(false)
+    if (!selStart || !selEnd || !configId) return
+    const minX = Math.min(selStart.x, selEnd.x)
+    const maxX = Math.max(selStart.x, selEnd.x)
+    const minY = Math.min(selStart.y, selEnd.y)
+    const maxY = Math.max(selStart.y, selEnd.y)
+    const area = (maxX - minX) * (maxY - minY)
+    setSelStart(null)
+    setSelEnd(null)
+    if (area < 1e-6) return
+
+    const filtered = seats.filter((s) => {
+      if (activeRowId !== null && s.row_id !== activeRowId) return false
+      if (activeSectionId !== null) {
+        const r = rowById.get(s.row_id as Id)
+        if (!r || r.section_id !== activeSectionId) return false
+      }
+      const x = s.x_m as number
+      const y = s.y_m as number
+      return x >= minX && x <= maxX && y >= minY && y <= maxY
+    })
+    const ids = filtered.map((s) => s.id as Id)
+    if (ids.length === 0) return
+    const status = tool === 'paint-blocked' ? 'blocked' : tool === 'paint-kill' ? 'kill' : 'sellable'
+    bulkOverrideM.mutate({ seat_ids: ids, status })
+    notifications.show({ message: `Painted ${ids.length} seats` })
   }
 
   function onStageDblClick() {
@@ -415,6 +525,9 @@ function App() {
             </Button>
             <Button variant="subtle" disabled={!venueId} onClick={() => exportM.mutate()}>
               Export
+            </Button>
+            <Button variant="subtle" disabled={!venueId} onClick={() => exportCsvM.mutate()}>
+              Export CSV
             </Button>
             <Button variant="subtle" onClick={() => importM.mutate()}>
               Import
@@ -542,6 +655,30 @@ function App() {
           <Text size="sm" c="dimmed">
             Tip: double-click to finish polygons/rows.
           </Text>
+
+          <Text fw={700} mt="md">
+            Seat inspector
+          </Text>
+          {seatInfo ? (
+            <Stack gap={2}>
+              <Text size="sm">
+                <b>{seatInfo.code}</b>
+              </Text>
+              <Text size="sm" c="dimmed">
+                {seatInfo.level} / {seatInfo.section} / {seatInfo.row}
+              </Text>
+              <Text size="sm" c="dimmed">
+                status: {String(seatInfo.status)}
+              </Text>
+              <Text size="sm" c="dimmed">
+                x,y: {Number(seatInfo.x).toFixed(2)}, {Number(seatInfo.y).toFixed(2)}
+              </Text>
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              Click a seat to inspect.
+            </Text>
+          )}
         </Stack>
       </AppShell.Navbar>
 
@@ -551,12 +688,16 @@ function App() {
         ) : snapQ.isLoading ? (
           <Text>Loading…</Text>
         ) : (
-          <Stage
-            width={1100}
-            height={750}
+          <div ref={stageWrapRef} style={{ width: '100%', height: 'calc(100vh - 120px)' }}>
+            <Stage
+            width={Math.max(300, stageW)}
+            height={Math.max(300, stageH)}
             onClick={onStageClick}
             onDblClick={onStageDblClick}
             onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}
             draggable={tool === 'select'}
             x={pan.x}
             y={pan.y}
@@ -637,8 +778,11 @@ function App() {
                     radius={0.18}
                     fill={fill}
                     opacity={isInActiveRow ? 1 : 0.4}
+                    onMouseEnter={() => setHoverSeatId(seatId)}
+                    onMouseLeave={() => setHoverSeatId((h) => (h === seatId ? null : h))}
                     onClick={(e) => {
                       e.cancelBubble = true
+                      setSelectedSeatId(seatId)
                       if (tool === 'paint-blocked' && configId) overrideM.mutate({ seat_id: seatId, status: 'blocked' })
                       if (tool === 'paint-kill' && configId) overrideM.mutate({ seat_id: seatId, status: 'kill' })
                       if (tool === 'paint-sellable' && configId) overrideM.mutate({ seat_id: seatId, status: 'sellable' })
@@ -646,8 +790,21 @@ function App() {
                   />
                 )
               })}
+
+              {/* Selection rectangle */}
+              {selecting && selStart && selEnd && (
+                <Rect
+                  x={Math.min(selStart.x, selEnd.x)}
+                  y={Math.min(selStart.y, selEnd.y)}
+                  width={Math.abs(selEnd.x - selStart.x)}
+                  height={Math.abs(selEnd.y - selStart.y)}
+                  stroke="#a78bfa"
+                  strokeWidth={0.05}
+                />
+              )}
             </Layer>
-          </Stage>
+            </Stage>
+          </div>
         )}
       </AppShell.Main>
 
