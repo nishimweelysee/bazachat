@@ -59,3 +59,43 @@ Import assignments from a CSV with headers `row,col,name`:
 ```bash
 python3 -m seating_chart import-csv --input assignments.csv --rows 4 --cols 6
 ```
+
+---
+
+# Venue Seating Designer (Stadium/Arena Layout Tool)
+
+This repository also includes an early **venue seating designer** for stadiums/arenas with:
+
+- **Pitch/Stage** polygon (reference geometry)
+- **Levels → Sections → Rows → Seats**
+- **Mixed row geometry** (line segments + arc segments)
+- **Meter-accurate drawing space**
+- **Configurations** (event layouts) with per-seat **blocked/kill/sellable** overrides
+
+## Run the backend (FastAPI)
+
+```bash
+python3 -m pip install -r backend/requirements.txt
+python3 -m uvicorn backend.app.main:app --reload --port 8000
+```
+
+Then open the API docs at `http://localhost:8000/docs`.
+
+## Run the frontend (React)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The UI expects the backend at `http://localhost:8000` (override with `VITE_API_BASE`).
+
+## UI basics
+
+- **Draw pitch**: pick “Draw pitch”, click points, then **double-click** to save.
+- **Draw section**: select a level, pick “Draw section”, click points, **double-click**, then enter a section code.
+- **Draw row (line)**: select a section, pick “Draw row (line)”, click points, **double-click**, then save row label.
+- **Draw row (arc)**: pick “Draw row (arc)”, click **3 points** (start/mid/end), then save.
+- **Generate seats**: select a row → “Generate seats”.
+- **Configurations**: create/select a config in the top bar, then “Paint blocked/kill” and click seats.

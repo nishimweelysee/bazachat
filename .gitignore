@@ -5,3 +5,6 @@ __pycache__/
 # Default chart file produced by the CLI
 seating_chart.json
 
+# Venue seating designer data
+data/
+
