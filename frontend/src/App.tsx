@@ -1,32 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ActionIcon,
-  Anchor,
   AppShell,
   Button,
-  Divider,
   Group,
   Modal,
   NumberInput,
-  ScrollArea,
   Select,
   Stack,
   Switch,
   Table,
   Text,
   TextInput,
-  Tooltip,
   useMantineColorScheme,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useElementSize } from '@mantine/hooks'
-import { useEffect, useMemo, useState } from 'react'
-import { Circle, Layer, Line, Rect, Stage, Text as KText } from 'react-konva'
-import {
-  IconHelp,
-  IconMoon,
-  IconSun,
-} from '@tabler/icons-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createConfig,
   createLevel,
@@ -57,9 +46,11 @@ import {
   type Id,
   type PathSeg,
 } from './api'
-import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonCentroid, type Pt } from './geometry'
+import { arcFrom3Points, closestPointOnSegment, pointOnArc, type Pt } from './geometry'
 import { polygonArea } from './geometry'
-import { CanvasControls } from './components/CanvasControls'
+import { TopBar } from './components/TopBar'
+import { Sidebar } from './components/Sidebar'
+import { CanvasView } from './components/CanvasView'
 
 type Tool =
   | 'select'
@@ -71,30 +62,6 @@ type Tool =
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
-
-function toPoints(arr: Array<[number, number]>): number[] {
-  const out: number[] = []
-  for (const [x, y] of arr) out.push(x, y)
-  return out
-}
-
-function sampleArc(seg: { cx: number; cy: number; r: number; start_deg: number; end_deg: number; cw: boolean }, steps = 48): Array<[number, number]> {
-  const toRad = (d: number) => (d * Math.PI) / 180
-  const norm = (r: number) => ((r % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
-  const s = norm(toRad(seg.start_deg))
-  const e = norm(toRad(seg.end_deg))
-  const cwDelta = (s: number, e: number) => (s - e + 2 * Math.PI) % (2 * Math.PI)
-  const ccwDelta = (s: number, e: number) => (e - s + 2 * Math.PI) % (2 * Math.PI)
-  const delta = seg.cw ? cwDelta(s, e) : ccwDelta(s, e)
-
-  const pts: Array<[number, number]> = []
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps
-    const ang = seg.cw ? norm(s - delta * t) : norm(s + delta * t)
-    pts.push([seg.cx + seg.r * Math.cos(ang), seg.cy + seg.r * Math.sin(ang)])
-  }
-  return pts
-}
 
 function App() {
   const qc = useQueryClient()
@@ -131,6 +98,16 @@ function App() {
   const [scale, setScale] = useState(1)
   const [defaultView] = useState(() => ({ pan: { x: 450, y: 350 }, scale: 1 }))
   const [helpOpen, setHelpOpen] = useState(false)
+
+  const panRef = useRef(pan)
+  const scaleRef = useRef(scale)
+  const animRef = useRef<number | null>(null)
+  useEffect(() => {
+    panRef.current = pan
+  }, [pan])
+  useEffect(() => {
+    scaleRef.current = scale
+  }, [scale])
 
   const [hoverSeatId, setHoverSeatId] = useState<Id | null>(null)
   const [selectedSeatId, setSelectedSeatId] = useState<Id | null>(null)
@@ -544,6 +521,26 @@ function App() {
     return { minX, minY, maxX, maxY }
   }
 
+  function animateView(target: { pan: { x: number; y: number }; scale: number }, durationMs = 220) {
+    if (animRef.current) cancelAnimationFrame(animRef.current)
+    const startPan = panRef.current
+    const startScale = scaleRef.current
+    const start = performance.now()
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - start) / durationMs)
+      const ease = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2
+      const nextScale = startScale + (target.scale - startScale) * ease
+      const nextPan = {
+        x: startPan.x + (target.pan.x - startPan.x) * ease,
+        y: startPan.y + (target.pan.y - startPan.y) * ease,
+      }
+      setScale(nextScale)
+      setPan(nextPan)
+      if (k < 1) animRef.current = requestAnimationFrame(tick)
+    }
+    animRef.current = requestAnimationFrame(tick)
+  }
+
   function zoomToBounds(b: { minX: number; minY: number; maxX: number; maxY: number }) {
     const vw = Math.max(300, stageW)
     const vh = Math.max(300, stageH)
@@ -553,8 +550,7 @@ function App() {
     const nextScale = Math.min((vw - pad) / w, (vh - pad) / h)
     const cx = (b.minX + b.maxX) / 2
     const cy = (b.minY + b.maxY) / 2
-    setScale(nextScale)
-    setPan({ x: vw / 2 - cx * nextScale, y: vh / 2 - cy * nextScale })
+    animateView({ scale: nextScale, pan: { x: vw / 2 - cx * nextScale, y: vh / 2 - cy * nextScale } })
   }
 
   function zoomToSection(sectionId: Id) {
@@ -601,13 +597,11 @@ function App() {
       const b = boundsFromPoints(pitchPoints)
       if (b) return zoomToBounds(b)
     }
-    setScale(1)
-    setPan({ x: stageW / 2, y: stageH / 2 })
+    animateView({ scale: 1, pan: { x: stageW / 2, y: stageH / 2 } })
   }
 
   function resetView() {
-    setScale(defaultView.scale)
-    setPan(defaultView.pan)
+    animateView({ scale: defaultView.scale, pan: defaultView.pan })
   }
 
   function fitToSelection() {
@@ -643,6 +637,11 @@ function App() {
       }
       const b = boundsFromPoints(pts)
       if (b) return zoomToBounds(b)
+    }
+
+    if (selectedSeatId) {
+      const s = seats.find((x) => (x.id as Id) === selectedSeatId)
+      if (s) return zoomToBounds({ minX: s.x_m as number, minY: s.y_m as number, maxX: s.x_m as number, maxY: s.y_m as number })
     }
 
     if (activeRowId) {
@@ -928,6 +927,7 @@ function App() {
 
   function onWheel(e: any) {
     e.evt.preventDefault()
+    if (animRef.current) cancelAnimationFrame(animRef.current)
     const stage = e.target.getStage()
     const pointer = stage.getPointerPosition()
     if (!pointer) return
@@ -984,477 +984,252 @@ function App() {
       padding="md"
     >
       <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Group>
-            <Text fw={800} size="lg">
-              Venue Seating Designer
-            </Text>
-            <Anchor href="http://localhost:8000/docs" target="_blank">
-              API docs
-            </Anchor>
-          </Group>
-          <Group>
-            <Select
-              placeholder="Select venue"
-              data={(venuesQ.data ?? []).map((v) => ({ value: String(v.id), label: v.name }))}
-              value={venueId ? String(venueId) : null}
-              onChange={(v) => {
-                const id = v ? Number(v) : null
-                setVenueId(id)
-                setActiveLevelId(null)
-                setActiveSectionId(null)
-                setActiveRowId(null)
-              }}
-              w={260}
-            />
-            <Select
-              placeholder="Config (event layout)"
-              data={(configsQ.data ?? []).map((c) => ({ value: String(c.id), label: c.name }))}
-              value={configId ? String(configId) : null}
-              onChange={(v) => setConfigId(v ? Number(v) : null)}
-              w={260}
-              disabled={!venueId}
-              clearable
-            />
-            <Button variant="light" disabled={!venueId} onClick={() => setCreateConfigOpen(true)}>
-              New config
-            </Button>
-            <Button variant="light" onClick={() => setCreateVenueOpen(true)}>
-              New venue
-            </Button>
-            <Button variant="subtle" disabled={!venueId} onClick={() => exportM.mutate()}>
-              Export
-            </Button>
-            <Button variant="subtle" disabled={!venueId} onClick={() => exportCsvM.mutate()}>
-              Export CSV
-            </Button>
-            <Button variant="subtle" disabled={!venueId} onClick={() => exportZonesCsvM.mutate()}>
-              Export zones CSV
-            </Button>
-            <Button variant="subtle" disabled={!venueId || !configId} onClick={() => exportManifestM.mutate()}>
-              Export manifest
-            </Button>
-            <Button variant="subtle" onClick={() => importM.mutate()}>
-              Import
-            </Button>
-            <Tooltip label={colorScheme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
-              <ActionIcon variant="default" onClick={() => toggleColorScheme()} aria-label="Toggle color scheme">
-                {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="Help / shortcuts (?)">
-              <ActionIcon variant="default" onClick={() => setHelpOpen(true)} aria-label="Help">
-                <IconHelp size={18} />
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-        </Group>
+        <TopBar
+          venues={(venuesQ.data ?? []) as any}
+          configs={(configsQ.data ?? []) as any}
+          venueId={venueId}
+          configId={configId}
+          onVenueChange={(id) => {
+            setVenueId(id)
+            setActiveLevelId(null)
+            setActiveSectionId(null)
+            setActiveRowId(null)
+          }}
+          onConfigChange={(id) => setConfigId(id)}
+          onNewVenue={() => setCreateVenueOpen(true)}
+          onNewConfig={() => setCreateConfigOpen(true)}
+          onExportPackage={() => exportM.mutate()}
+          onExportSeatsCsv={() => exportCsvM.mutate()}
+          onExportZonesCsv={() => exportZonesCsvM.mutate()}
+          onExportManifest={() => exportManifestM.mutate()}
+          onImportPackage={() => importM.mutate()}
+          onToggleTheme={() => toggleColorScheme()}
+          colorScheme={colorScheme}
+          onHelp={() => setHelpOpen(true)}
+        />
       </AppShell.Header>
 
       <AppShell.Navbar p="md">
-        <ScrollArea h="calc(100vh - 90px)" offsetScrollbars scrollbarSize={8}>
-          <Stack gap="md">
-          <Text fw={700}>Project</Text>
-          <Button disabled={!venueId} onClick={() => setCreateLevelOpen(true)}>
-            Add level
-          </Button>
-          <Select
-            label="Active level"
-            data={levelOptions}
-            value={activeLevelId ? String(activeLevelId) : null}
-            onChange={(v) => {
-              const id = v ? Number(v) : null
-              setActiveLevelId(id)
-              setActiveSectionId(null)
-              setActiveRowId(null)
-            }}
-          />
-
-          <Select
-            label="Active section"
-            data={sectionOptions}
-            value={activeSectionId ? String(activeSectionId) : null}
-            onChange={(v) => {
-              const id = v ? Number(v) : null
-              setActiveSectionId(id)
-              setActiveRowId(null)
-            }}
-            disabled={!activeLevelId}
-          />
-
-          <Select
-            label="Active row"
-            data={rowOptions}
-            value={activeRowId ? String(activeRowId) : null}
-            onChange={(v) => setActiveRowId(v ? Number(v) : null)}
-            disabled={!activeSectionId}
-          />
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Tools
-          </Text>
-          <Group grow>
-            <Button variant={tool === 'select' ? 'filled' : 'light'} onClick={() => setTool('select')}>
-              Select
-            </Button>
-            <Button variant={tool === 'draw-pitch' ? 'filled' : 'light'} disabled={!venueId} onClick={() => setTool('draw-pitch')}>
-              Draw pitch
-            </Button>
-          </Group>
-          <Group grow>
-            <Button variant="light" onClick={undo} disabled={(draftPts.length + draftRowPts.length + draftArcPts.length) === 0}>
-              Undo
-            </Button>
-            <Button variant="light" onClick={cancelDraft} disabled={(draftPts.length + draftRowPts.length + draftArcPts.length) === 0}>
-              Cancel
-            </Button>
-          </Group>
-          <Switch label="Snap to grid" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} />
-          <NumberInput label="Grid step (m)" value={gridStep} onChange={(v) => setGridStep(Number(v ?? 0.1))} decimalScale={3} />
-          <Group grow>
-            <Button
-              variant={tool === 'draw-section' ? 'filled' : 'light'}
-              disabled={!activeLevelId}
-              onClick={() => {
-                setDraftPts([])
-                setTool('draw-section')
-              }}
-            >
-              Draw section
-            </Button>
-            <Button
-              variant={tool === 'draw-row-line' ? 'filled' : 'light'}
-              disabled={!activeSectionId}
-              onClick={() => {
-                setDraftRowPts([])
-                setTool('draw-row-line')
-              }}
-            >
-              Draw row (line)
-            </Button>
-          </Group>
-          <Group grow>
-            <Button
-              variant={tool === 'draw-row-arc' ? 'filled' : 'light'}
-              disabled={!activeSectionId}
-              onClick={() => {
-                setDraftArcPts([])
-                setTool('draw-row-arc')
-              }}
-            >
-              Draw row (arc)
-            </Button>
-            <Button variant="light" disabled={!activeRowId} onClick={() => setGenSeatsOpen(true)}>
-              Generate seats
-            </Button>
-          </Group>
-          <Group grow>
-            <Button
-              variant={tool === 'draw-zone' ? 'filled' : 'light'}
-              disabled={!activeSectionId}
-              onClick={() => {
-                setDraftZonePts([])
-                setTool('draw-zone')
-              }}
-            >
-              Draw standing zone
-            </Button>
-          </Group>
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Configuration paint
-          </Text>
-          <Text size="sm" c="dimmed">
-            Pick a config (event layout) in the top bar, then paint seat statuses.
-          </Text>
-          <Group grow>
-            <Button variant={tool === 'paint-blocked' ? 'filled' : 'light'} disabled={!configId} onClick={() => setTool('paint-blocked')}>
-              Paint blocked
-            </Button>
-            <Button variant={tool === 'paint-kill' ? 'filled' : 'light'} disabled={!configId} onClick={() => setTool('paint-kill')}>
-              Paint kill
-            </Button>
-          </Group>
-          <Group grow>
-            <Button variant={tool === 'paint-sellable' ? 'filled' : 'light'} disabled={!configId} onClick={() => setTool('paint-sellable')}>
-              Paint sellable
-            </Button>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Tip: double-click to finish polygons/rows.
-          </Text>
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Selection
-          </Text>
-          <Text size="sm" c="dimmed">
-            Shift-drag a rectangle to add seats to selection.
-          </Text>
-          <Group grow>
-            <Button
-              variant="light"
-              disabled={!configId || selectedSeatIds.size === 0}
-              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
-            >
-              Block selected
-            </Button>
-            <Button
-              variant="light"
-              disabled={!configId || selectedSeatIds.size === 0}
-              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
-            >
-              Kill selected
-            </Button>
-          </Group>
-          <Group grow>
-            <Button
-              variant="light"
-              disabled={!configId || selectedSeatIds.size === 0}
-              onClick={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
-            >
-              Clear selected
-            </Button>
-            <Button variant="light" disabled={selectedSeatIds.size === 0} onClick={() => setSelectedSeatIds(new Set())}>
-              Clear selection
-            </Button>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Selected seats: {selectedSeatIds.size}
-          </Text>
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Row gaps (aisles)
-          </Text>
-          <Text size="sm" c="dimmed">
-            Generated seats skip distances within gaps along the active row path.
-          </Text>
-          <Text size="sm" c="dimmed">
-            Row length: {rowMetricsQ.data ? rowMetricsQ.data.total_length_m.toFixed(2) : '—'} m
-          </Text>
-          <Group grow>
-            <NumberInput label="Gap start (m)" value={gapStartM} onChange={(v) => setGapStartM(Number(v ?? 0))} decimalScale={2} />
-            <NumberInput label="Gap end (m)" value={gapEndM} onChange={(v) => setGapEndM(Number(v ?? 0.5))} decimalScale={2} />
-          </Group>
-          <Button
-            variant="light"
-            disabled={!activeRowId || !activeRowPath}
-            onClick={() => updateActiveRowGaps([...activeRowGaps, [gapStartM, gapEndM]])}
-          >
-            Add gap
-          </Button>
-          {activeRowGaps.length ? (
-            <Stack gap={4}>
-              {activeRowGaps.map((g, idx) => (
-                <Group key={`gap-${idx}`} justify="space-between">
-                  <Text size="sm">
-                    {g[0].toFixed(2)} → {g[1].toFixed(2)} m
-                  </Text>
-                  <Button variant="subtle" onClick={() => updateActiveRowGaps(activeRowGaps.filter((_, i) => i !== idx))}>
-                    Remove
-                  </Button>
-                </Group>
-              ))}
-            </Stack>
-          ) : (
-            <Text size="sm" c="dimmed">
-              No gaps.
-            </Text>
-          )}
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Seat inspector
-          </Text>
-          {seatInfo ? (
-            <Stack gap={2}>
-              <Text size="sm">
-                <b>{seatInfo.code}</b>
-              </Text>
+        <Sidebar
+          venueId={venueId}
+          configId={configId}
+          levelOptions={levelOptions}
+          sectionOptions={sectionOptions}
+          rowOptions={rowOptions}
+          activeLevelId={activeLevelId}
+          activeSectionId={activeSectionId}
+          activeRowId={activeRowId}
+          setActiveLevelId={setActiveLevelId}
+          setActiveSectionId={setActiveSectionId}
+          setActiveRowId={setActiveRowId}
+          tool={tool}
+          setTool={(t) => {
+            if (t === 'draw-section') setDraftPts([])
+            if (t === 'draw-row-line') setDraftRowPts([])
+            if (t === 'draw-row-arc') setDraftArcPts([])
+            if (t === 'draw-zone') setDraftZonePts([])
+            setTool(t)
+          }}
+          canUndo={(draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length) > 0}
+          onUndo={undo}
+          onCancelDraft={cancelDraft}
+          snapEnabled={snapEnabled}
+          setSnapEnabled={setSnapEnabled}
+          gridStep={gridStep}
+          setGridStep={setGridStep}
+          onAddLevel={() => setCreateLevelOpen(true)}
+          onGenerateSeats={() => setGenSeatsOpen(true)}
+          selectedSeatCount={selectedSeatIds.size}
+          onBlockSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'blocked' })}
+          onKillSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
+          onClearSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
+          onClearSelection={() => setSelectedSeatIds(new Set())}
+          rowLengthText={rowMetricsQ.data ? `${rowMetricsQ.data.total_length_m.toFixed(2)} m` : '—'}
+          gapStartM={gapStartM}
+          setGapStartM={setGapStartM}
+          gapEndM={gapEndM}
+          setGapEndM={setGapEndM}
+          canAddGap={Boolean(activeRowId && activeRowPath)}
+          onAddGap={() => updateActiveRowGaps([...activeRowGaps, [gapStartM, gapEndM]])}
+          gapList={
+            activeRowGaps.length ? (
+              <Stack gap={4}>
+                {activeRowGaps.map((g, idx) => (
+                  <Group key={`gap-${idx}`} justify="space-between">
+                    <Text size="sm">
+                      {g[0].toFixed(2)} → {g[1].toFixed(2)} m
+                    </Text>
+                    <Button variant="subtle" onClick={() => updateActiveRowGaps(activeRowGaps.filter((_, i) => i !== idx))}>
+                      Remove
+                    </Button>
+                  </Group>
+                ))}
+              </Stack>
+            ) : (
               <Text size="sm" c="dimmed">
-                {seatInfo.level} / {seatInfo.section} / {seatInfo.row}
+                No gaps.
               </Text>
+            )
+          }
+          seatInspector={
+            seatInfo ? (
+              <Stack gap={2}>
+                <Text size="sm">
+                  <b>{seatInfo.code}</b>
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {seatInfo.level} / {seatInfo.section} / {seatInfo.row}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  status: {String(seatInfo.status)}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  x,y: {Number(seatInfo.x).toFixed(2)}, {Number(seatInfo.y).toFixed(2)}
+                </Text>
+              </Stack>
+            ) : (
               <Text size="sm" c="dimmed">
-                status: {String(seatInfo.status)}
+                Click a seat to inspect.
               </Text>
+            )
+          }
+          zoneInspector={
+            zoneInfo ? (
+              <Stack gap={2}>
+                <Text size="sm">
+                  <b>{zoneInfo.name}</b> ({zoneInfo.zone_type})
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {zoneInfo.level} / {zoneInfo.section}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  capacity: {zoneInfo.capacity}
+                </Text>
+                <Button variant="light" onClick={() => setEditZoneOpen(true)}>
+                  Edit zone
+                </Button>
+              </Stack>
+            ) : (
               <Text size="sm" c="dimmed">
-                x,y: {Number(seatInfo.x).toFixed(2)}, {Number(seatInfo.y).toFixed(2)}
+                Click a zone to inspect.
               </Text>
-            </Stack>
-          ) : (
-            <Text size="sm" c="dimmed">
-              Click a seat to inspect.
-            </Text>
-          )}
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Venue summary
-          </Text>
-          {summaryQ.data ? (
-            <Stack gap={2}>
+            )
+          }
+          summary={
+            summaryQ.data ? (
+              <Stack gap={2}>
+                <Text size="sm" c="dimmed">
+                  seats total: {summaryQ.data.seats_total}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  sellable: {summaryQ.data.seats_sellable} / blocked: {summaryQ.data.seats_blocked} / kill: {summaryQ.data.seats_kill}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  standing capacity: {summaryQ.data.standing_capacity}
+                </Text>
+              </Stack>
+            ) : (
               <Text size="sm" c="dimmed">
-                seats total: {summaryQ.data.seats_total}
+                —
               </Text>
-              <Text size="sm" c="dimmed">
-                sellable: {summaryQ.data.seats_sellable} / blocked: {summaryQ.data.seats_blocked} / kill: {summaryQ.data.seats_kill}
-              </Text>
-              <Text size="sm" c="dimmed">
-                standing capacity: {summaryQ.data.standing_capacity}
-              </Text>
-            </Stack>
-          ) : (
-            <Text size="sm" c="dimmed">
-              —
-            </Text>
-          )}
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Breakdown (sections)
-          </Text>
-          <Select
-            label="View"
-            data={[
-              { value: 'sections', label: 'Sections' },
-              { value: 'levels', label: 'Levels' },
-            ]}
-            value={breakdownView}
-            onChange={(v) => setBreakdownView((v as any) ?? 'sections')}
-          />
-          <TextInput label="Filter" value={breakdownFilter} onChange={(e) => setBreakdownFilter(e.target.value)} placeholder="e.g. Lower/101" />
-          <Button variant="light" disabled={!venueId} onClick={() => exportBreakdownCsvM.mutate()}>
-            Export breakdown CSV
-          </Button>
-          <Group grow>
-            <NumberInput
-              label="Page"
-              value={breakdownPage}
-              onChange={(v) => setBreakdownPage(Math.max(1, Math.min(breakdownTotalPages, Number(v ?? 1))))}
-              min={1}
-              max={breakdownTotalPages}
-            />
-            <NumberInput
-              label="Page size"
-              value={breakdownPageSize}
-              onChange={(v) => setBreakdownPageSize(Math.max(5, Math.min(200, Number(v ?? 30))))}
-              min={5}
-              max={200}
-            />
-          </Group>
-          {breakdownQ.data ? (
-            <Table withColumnBorders withRowBorders={false} striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setBreakdownSort((s) => ({ key: 'name', dir: s.key === 'name' && s.dir === 'asc' ? 'desc' : 'asc' }))}
-                  >
-                    Name
-                  </Table.Th>
-                  <Table.Th
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setBreakdownSort((s) => ({ key: 'sellable', dir: s.key === 'sellable' && s.dir === 'asc' ? 'desc' : 'asc' }))}
-                  >
-                    Sellable
-                  </Table.Th>
-                  <Table.Th
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setBreakdownSort((s) => ({ key: 'blocked', dir: s.key === 'blocked' && s.dir === 'asc' ? 'desc' : 'asc' }))}
-                  >
-                    Blocked
-                  </Table.Th>
-                  <Table.Th
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setBreakdownSort((s) => ({ key: 'kill', dir: s.key === 'kill' && s.dir === 'asc' ? 'desc' : 'asc' }))}
-                  >
-                    Kill
-                  </Table.Th>
-                  <Table.Th
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setBreakdownSort((s) => ({ key: 'standing_capacity', dir: s.key === 'standing_capacity' && s.dir === 'asc' ? 'desc' : 'asc' }))}
-                  >
-                    Standing
-                  </Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {breakdownPageRows.map((r: any, i: number) => {
-                  const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
-                  return (
-                    <Table.Tr
-                      key={`br-${i}`}
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => {
-                        if (breakdownView === 'sections') {
-                          setActiveLevelId(r.level_id as Id)
-                          setActiveSectionId(r.section_id as Id)
-                          setActiveRowId(null)
-                          zoomToSection(r.section_id as Id)
-                        } else {
-                          setActiveLevelId(r.level_id as Id)
-                          setActiveSectionId(null)
-                          setActiveRowId(null)
-                          zoomToLevel(r.level_id as Id)
-                        }
-                      }}
-                    >
-                      <Table.Td>{name}</Table.Td>
-                      <Table.Td>{r.sellable}</Table.Td>
-                      <Table.Td>{r.blocked}</Table.Td>
-                      <Table.Td>{r.kill}</Table.Td>
-                      <Table.Td>{r.standing_capacity}</Table.Td>
-                    </Table.Tr>
-                  )
-                })}
-              </Table.Tbody>
-            </Table>
-          ) : (
-            <Text size="sm" c="dimmed">
-              —
-            </Text>
-          )}
-          {breakdownRows.length > breakdownPageSize && (
-            <Text size="sm" c="dimmed">
-              Showing page {breakdownPage} of {breakdownTotalPages} ({breakdownRows.length} rows).
-            </Text>
-          )}
-
-          <Divider />
-
-          <Text fw={700} mt="md">
-            Zone inspector
-          </Text>
-          {zoneInfo ? (
-            <Stack gap={2}>
-              <Text size="sm">
-                <b>{zoneInfo.name}</b> ({zoneInfo.zone_type})
-              </Text>
-              <Text size="sm" c="dimmed">
-                {zoneInfo.level} / {zoneInfo.section}
-              </Text>
-              <Text size="sm" c="dimmed">
-                capacity: {zoneInfo.capacity}
-              </Text>
-              <Button variant="light" onClick={() => setEditZoneOpen(true)}>
-                Edit zone
+            )
+          }
+          breakdown={
+            <>
+              <Select
+                label="View"
+                data={[
+                  { value: 'sections', label: 'Sections' },
+                  { value: 'levels', label: 'Levels' },
+                ]}
+                value={breakdownView}
+                onChange={(v) => setBreakdownView((v as any) ?? 'sections')}
+              />
+              <TextInput label="Filter" value={breakdownFilter} onChange={(e) => setBreakdownFilter(e.target.value)} placeholder="e.g. Lower/101" />
+              <Button variant="light" disabled={!venueId} onClick={() => exportBreakdownCsvM.mutate()}>
+                Export breakdown CSV
               </Button>
-            </Stack>
-          ) : (
-            <Text size="sm" c="dimmed">
-              Click a zone to inspect.
-            </Text>
-          )}
-          </Stack>
-        </ScrollArea>
+              <Group grow>
+                <NumberInput
+                  label="Page"
+                  value={breakdownPage}
+                  onChange={(v) => setBreakdownPage(Math.max(1, Math.min(breakdownTotalPages, Number(v ?? 1))))}
+                  min={1}
+                  max={breakdownTotalPages}
+                />
+                <NumberInput
+                  label="Page size"
+                  value={breakdownPageSize}
+                  onChange={(v) => setBreakdownPageSize(Math.max(5, Math.min(200, Number(v ?? 30))))}
+                  min={5}
+                  max={200}
+                />
+              </Group>
+              {breakdownQ.data ? (
+                <Table withColumnBorders withRowBorders={false} striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th style={{ cursor: 'pointer' }} onClick={() => setBreakdownSort((s) => ({ key: 'name', dir: s.key === 'name' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                        Name
+                      </Table.Th>
+                      <Table.Th style={{ cursor: 'pointer' }} onClick={() => setBreakdownSort((s) => ({ key: 'sellable', dir: s.key === 'sellable' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                        Sellable
+                      </Table.Th>
+                      <Table.Th style={{ cursor: 'pointer' }} onClick={() => setBreakdownSort((s) => ({ key: 'blocked', dir: s.key === 'blocked' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                        Blocked
+                      </Table.Th>
+                      <Table.Th style={{ cursor: 'pointer' }} onClick={() => setBreakdownSort((s) => ({ key: 'kill', dir: s.key === 'kill' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                        Kill
+                      </Table.Th>
+                      <Table.Th style={{ cursor: 'pointer' }} onClick={() => setBreakdownSort((s) => ({ key: 'standing_capacity', dir: s.key === 'standing_capacity' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                        Standing
+                      </Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {breakdownPageRows.map((r: any, i: number) => {
+                      const name = breakdownView === 'sections' ? `${r.level_name}/${r.section_code}` : `${r.level_name}`
+                      return (
+                        <Table.Tr
+                          key={`br-${i}`}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => {
+                            if (breakdownView === 'sections') {
+                              setActiveLevelId(r.level_id as Id)
+                              setActiveSectionId(r.section_id as Id)
+                              setActiveRowId(null)
+                              zoomToSection(r.section_id as Id)
+                            } else {
+                              setActiveLevelId(r.level_id as Id)
+                              setActiveSectionId(null)
+                              setActiveRowId(null)
+                              zoomToLevel(r.level_id as Id)
+                            }
+                          }}
+                        >
+                          <Table.Td>{name}</Table.Td>
+                          <Table.Td>{r.sellable}</Table.Td>
+                          <Table.Td>{r.blocked}</Table.Td>
+                          <Table.Td>{r.kill}</Table.Td>
+                          <Table.Td>{r.standing_capacity}</Table.Td>
+                        </Table.Tr>
+                      )
+                    })}
+                  </Table.Tbody>
+                </Table>
+              ) : (
+                <Text size="sm" c="dimmed">
+                  —
+                </Text>
+              )}
+              {breakdownRows.length > breakdownPageSize && (
+                <Text size="sm" c="dimmed">
+                  Showing page {breakdownPage} of {breakdownTotalPages} ({breakdownRows.length} rows).
+                </Text>
+              )}
+            </>
+          }
+        />
       </AppShell.Navbar>
 
       <AppShell.Main>
@@ -1463,292 +1238,135 @@ function App() {
         ) : snapQ.isLoading ? (
           <Text>Loading…</Text>
         ) : (
-          <div ref={stageWrapRef} style={{ width: '100%', height: 'calc(100vh - 120px)', position: 'relative' }}>
-            <CanvasControls
-              tool={tool}
-              scale={scale}
-              onZoomIn={() => setScale((s) => Math.min(50, s * 1.1))}
-              onZoomOut={() => setScale((s) => Math.max(0.05, s / 1.1))}
-              onScaleChange={(v) => setScale(v)}
-              onFitVenue={fitToVenue}
-              onFitSelection={fitToSelection}
-              onResetView={resetView}
-            />
-            <Stage
-            width={Math.max(300, stageW)}
-            height={Math.max(300, stageH)}
-            onClick={onStageClick}
-            onDblClick={onStageDblClick}
+          <CanvasView
+            stageRef={stageWrapRef}
+            stageW={stageW}
+            stageH={stageH}
+            tool={tool}
+            scale={scale}
+            pan={pan}
+            setPan={setPan}
+            onZoomIn={() => setScale((s) => Math.min(50, s * 1.1))}
+            onZoomOut={() => setScale((s) => Math.max(0.05, s / 1.1))}
+            onScaleChange={(v) => setScale(v)}
+            onFitVenue={fitToVenue}
+            onFitSelection={fitToSelection}
+            onResetView={resetView}
+            onStageClick={onStageClick}
+            onStageDblClick={onStageDblClick}
             onWheel={onWheel}
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
             onMouseUp={onMouseUp}
-            draggable={tool === 'select'}
-            x={pan.x}
-            y={pan.y}
-            scaleX={scale}
-            scaleY={scale}
-            onDragEnd={(e) => setPan({ x: e.target.x(), y: e.target.y() })}
-          >
-            <Layer>
-              {/* subtle grid */}
-              {(() => {
-                const step = Math.max(0.5, gridStep * 10)
-                const lines: any[] = []
-                const w = 200
-                const h = 200
-                for (let x = -w; x <= w; x += step) {
-                  lines.push(
-                    <Line key={`gx-${x}`} points={[x, -h, x, h]} stroke="rgba(148,163,184,0.08)" strokeWidth={0.02} />
-                  )
-                }
-                for (let y = -h; y <= h; y += step) {
-                  lines.push(
-                    <Line key={`gy-${y}`} points={[-w, y, w, y]} stroke="rgba(148,163,184,0.08)" strokeWidth={0.02} />
-                  )
-                }
-                return lines
-              })()}
-              {pitchPoints && <Line points={toPoints(pitchPoints)} closed stroke="#22c55e" strokeWidth={2} />}
-              {draftPts.length >= 2 && <Line points={toPoints(draftPts.map((p) => [p.x, p.y]))} stroke="#a78bfa" strokeWidth={2} />}
-              {draftZonePts.length >= 2 && <Line points={toPoints(draftZonePts.map((p) => [p.x, p.y]))} stroke="#34d399" strokeWidth={2} />}
-
-              {sections.map((s) => {
-                const pts = JSON.parse(s.geom_json as string) as Array<[number, number]>
-                const isActive = activeSectionId === (s.id as Id)
-                return (
-                  <Line
-                    key={`sec-${s.id}`}
-                    points={toPoints(pts)}
-                    closed
-                    stroke={isActive ? '#60a5fa' : '#334155'}
-                    fill={isActive ? 'rgba(96, 165, 250, 0.08)' : 'rgba(51, 65, 85, 0.05)'}
-                    strokeWidth={isActive ? 2.5 : 1.5}
-                    onClick={(e) => {
-                      e.cancelBubble = true
-                      setActiveLevelId(s.level_id as Id)
-                      setActiveSectionId(s.id as Id)
-                    }}
-                  />
-                )
-              })}
-
-              {/* Standing zones */}
-              {zones.map((z) => {
-                const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
-                const isActive = selectedZoneId === (z.id as Id)
-                const centroid = polygonCentroid(pts)
-                return (
-                  <>
-                    <Line
-                      key={`zone-${z.id}`}
-                      points={toPoints(pts)}
-                      closed
-                      stroke={isActive ? '#86efac' : '#34d399'}
-                      fill="rgba(52, 211, 153, 0.15)"
-                      strokeWidth={isActive ? 2.5 : 1.5}
-                      onClick={(e) => {
-                        e.cancelBubble = true
-                        setSelectedZoneId(z.id as Id)
-                        setSelectedSeatId(null)
-                      }}
-                    />
-                    {centroid && (
-                      <KText
-                        key={`zone-label-${z.id}`}
-                        x={centroid.x}
-                        y={centroid.y}
-                        text={`${z.name} (${z.capacity})`}
-                        fontSize={0.35}
-                        fill="#a7f3d0"
-                      />
-                    )}
-                  </>
-                )
-              })}
-
-              {/* Active zone vertex handles */}
-              {tool === 'select' &&
-                selectedZoneId &&
-                (() => {
-                  const z = zoneById.get(selectedZoneId)
-                  if (!z) return null
-                  const pts = JSON.parse(z.geom_json as string) as Array<[number, number]>
-                  return pts.map((p, idx) => (
-                    <Circle
-                      key={`zone-h-${idx}`}
-                      x={p[0]}
-                      y={p[1]}
-                      radius={0.22}
-                      fill="#34d399"
-                      draggable
-                      onDragEnd={(e) => {
-                        const sp = snap({ x: e.target.x(), y: e.target.y() })
-                        const next = pts.map((q, i): [number, number] => (i === idx ? [sp.x, sp.y] : [q[0], q[1]]))
-                        updateZone(selectedZoneId, { polygonPoints: next })
-                          .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
-                          .catch((err) => notifications.show({ color: 'red', message: String(err) }))
-                      }}
-                    />
-                  ))
-                })()}
-
-              {/* Draft row polyline */}
-              {draftRowPts.length >= 2 && <Line points={toPoints(draftRowPts.map((p) => [p.x, p.y]))} stroke="#fbbf24" strokeWidth={2} />}
-              {/* Draft arc points */}
-              {draftArcPts.map((p, i) => (
-                <Circle key={`arcpt-${i}`} x={p.x} y={p.y} radius={0.15} fill="#f97316" />
-              ))}
-
-              {/* Rows */}
-              {rows.map((r) => {
-                const isActive = activeRowId === (r.id as Id)
-                const path = JSON.parse(r.geom_json as string) as { segments: PathSeg[] }
-                const pts: Array<[number, number]> = []
-                for (const seg of path.segments as any[]) {
-                  if (seg.type === 'line') {
-                    if (pts.length === 0) pts.push([seg.x1, seg.y1])
-                    pts.push([seg.x2, seg.y2])
-                  } else if (seg.type === 'arc') {
-                    const arcPts = sampleArc(seg)
-                    if (pts.length === 0) pts.push(...arcPts)
-                    else pts.push(...arcPts.slice(1))
-                  }
-                }
-                return (
-                  <Line
-                    key={`row-${r.id}`}
-                    points={toPoints(pts)}
-                    stroke={isActive ? '#fbbf24' : '#475569'}
-                    strokeWidth={isActive ? 2.5 : 1.5}
-                    onClick={(e) => {
-                      e.cancelBubble = true
-                      setActiveSectionId(r.section_id as Id)
-                      setActiveRowId(r.id as Id)
-                    }}
-                  />
-                )
-              })}
-
-              {/* Seats */}
-              {seats.map((s) => {
-                const seatId = s.id as Id
-                const isInActiveRow = activeRowId !== null ? s.row_id === activeRowId : true
-                const fill = seatColor(seatId)
-                const isSelected = selectedSeatIds.has(seatId)
-                return (
-                  <Circle
-                    key={`seat-${seatId}`}
-                    x={s.x_m as number}
-                    y={s.y_m as number}
-                    radius={0.18}
-                    fill={fill}
-                    opacity={isInActiveRow ? 1 : 0.4}
-                    stroke={isSelected ? '#a78bfa' : undefined}
-                    strokeWidth={isSelected ? 0.06 : 0}
-                    onMouseEnter={() => setHoverSeatId(seatId)}
-                    onMouseLeave={() => setHoverSeatId((h) => (h === seatId ? null : h))}
-                    onClick={(e) => {
-                      e.cancelBubble = true
-                      setSelectedSeatId(seatId)
-                      if (tool === 'paint-blocked' && configId) overrideM.mutate({ seat_id: seatId, status: 'blocked' })
-                      if (tool === 'paint-kill' && configId) overrideM.mutate({ seat_id: seatId, status: 'kill' })
-                      if (tool === 'paint-sellable' && configId) overrideM.mutate({ seat_id: seatId, status: 'sellable' })
-                    }}
-                  />
-                )
-              })}
-
-              {/* Active section vertex handles */}
-              {tool === 'select' &&
-                activeSectionPoints?.map((p, idx) => (
-                  <Circle
-                    key={`sec-h-${idx}`}
-                    x={p[0]}
-                    y={p[1]}
-                    radius={0.22}
-                    fill="#60a5fa"
-                    draggable
-                    onDragEnd={(e) => {
-                      commitSectionPoint(idx, snap({ x: e.target.x(), y: e.target.y() }).x, snap({ x: e.target.x(), y: e.target.y() }).y)
-                    }}
-                  />
-                ))}
-
-              {/* Active row vertex handles (line-only rows) */}
-              {tool === 'select' &&
-                activeRowLineVertices?.map((p, idx) => (
-                  <Circle
-                    key={`row-h-${idx}`}
-                    x={p[0]}
-                    y={p[1]}
-                    radius={0.2}
-                    fill="#fbbf24"
-                    draggable
-                    onDragEnd={(e) => {
-                      const sp = snap({ x: e.target.x(), y: e.target.y() })
-                      commitRowVertex(idx, sp.x, sp.y)
-                    }}
-                  />
-                ))}
-
-              {/* Active arc row handles (single-arc rows): drag 3-point representation and re-fit arc */}
-              {tool === 'select' &&
-                activeRowPath?.segments?.length === 1 &&
-                (activeRowPath.segments[0] as any)?.type === 'arc' &&
-                (() => {
-                  const seg = activeRowPath.segments[0] as any
-                  const a = pointOnArc(seg, 0)
-                  const b = pointOnArc(seg, 0.5)
-                  const c = pointOnArc(seg, 1)
-                  const pts: Array<{ key: string; p: Pt; idx: 0 | 1 | 2 }> = [
-                    { key: 'a', p: a, idx: 0 },
-                    { key: 'b', p: b, idx: 1 },
-                    { key: 'c', p: c, idx: 2 },
-                  ]
-                  return pts.map((h) => (
-                    <Circle
-                      key={`arc-h-${h.key}`}
-                      x={h.p.x}
-                      y={h.p.y}
-                      radius={0.22}
-                      fill="#f97316"
-                      draggable
-                      onDragEnd={(e) => {
-                        const sp = snap({ x: e.target.x(), y: e.target.y() })
-                        // Re-fit arc from 3 points (start/mid/end)
-                        const curA = h.idx === 0 ? sp : a
-                        const curB = h.idx === 1 ? sp : b
-                        const curC = h.idx === 2 ? sp : c
-                        const arc = arcFrom3Points(curA, curB, curC)
-                        if (!arc || !activeRowId) return
-                        updateRowPath(activeRowId, { segments: [{ type: 'arc', ...arc } as any], gaps: activeRowGaps })
-                          .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
-                          .catch((err) => notifications.show({ color: 'red', message: String(err) }))
-                      }}
-                    />
-                  ))
-                })()}
-
-              {/* Hover tooltip */}
-              {hoverSeatInfo && (
-                <KText x={hoverSeatInfo.x + 0.25} y={hoverSeatInfo.y + 0.25} text={hoverSeatInfo.code} fontSize={0.25} fill="#e2e8f0" />
-              )}
-
-              {/* Selection rectangle */}
-              {selecting && selStart && selEnd && (
-                <Rect
-                  x={Math.min(selStart.x, selEnd.x)}
-                  y={Math.min(selStart.y, selEnd.y)}
-                  width={Math.abs(selEnd.x - selStart.x)}
-                  height={Math.abs(selEnd.y - selStart.y)}
-                  stroke="#a78bfa"
-                  strokeWidth={0.05}
-                />
-              )}
-            </Layer>
-            </Stage>
-          </div>
+            gridStep={gridStep}
+            pitchPoints={pitchPoints}
+            draftPts={draftPts}
+            draftZonePts={draftZonePts}
+            draftRowPts={draftRowPts}
+            draftArcPts={draftArcPts}
+            sections={sections}
+            zones={zones}
+            rows={rows}
+            seats={seats}
+            activeSectionId={activeSectionId}
+            activeRowId={activeRowId}
+            selectedZoneId={selectedZoneId}
+            selectedSeatIds={selectedSeatIds}
+            hoverSeatInfo={hoverSeatInfo}
+            onSeatHover={(sid) => setHoverSeatId(sid)}
+            onSelectSection={(lvlId, secId) => {
+              setActiveLevelId(lvlId)
+              setActiveSectionId(secId)
+            }}
+            onSelectZone={(zid) => {
+              setSelectedZoneId(zid)
+              setSelectedSeatId(null)
+            }}
+            onSelectRow={(secId, rid) => {
+              setActiveSectionId(secId)
+              setActiveRowId(rid)
+            }}
+            onSelectSeat={(seatId) => {
+              setSelectedSeatId(seatId)
+              if (tool === 'paint-blocked' && configId) overrideM.mutate({ seat_id: seatId, status: 'blocked' })
+              if (tool === 'paint-kill' && configId) overrideM.mutate({ seat_id: seatId, status: 'kill' })
+              if (tool === 'paint-sellable' && configId) overrideM.mutate({ seat_id: seatId, status: 'sellable' })
+            }}
+            seatColor={seatColor}
+            selecting={selecting}
+            selStart={selStart}
+            selEnd={selEnd}
+            activeSectionPoints={activeSectionPoints}
+            onDragSectionPoint={(idx, x, y) => {
+              const sp = snap({ x, y })
+              commitSectionPoint(idx, sp.x, sp.y)
+            }}
+            selectedZonePoints={
+              selectedZoneId
+                ? (() => {
+                    const z = zoneById.get(selectedZoneId)
+                    if (!z) return null
+                    try {
+                      return JSON.parse((z as any).geom_json as string) as Array<[number, number]>
+                    } catch {
+                      return null
+                    }
+                  })()
+                : null
+            }
+            onDragZonePoint={(idx, x, y) => {
+              if (!selectedZoneId) return
+              const z = zoneById.get(selectedZoneId)
+              if (!z) return
+              let pts: Array<[number, number]>
+              try {
+                pts = JSON.parse((z as any).geom_json as string) as Array<[number, number]>
+              } catch {
+                return
+              }
+              const sp = snap({ x, y })
+              const next = pts.map((q, i): [number, number] => (i === idx ? [sp.x, sp.y] : [q[0], q[1]]))
+              updateZone(selectedZoneId, { polygonPoints: next })
+                .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+            }}
+            activeRowLineVertices={activeRowLineVertices}
+            onDragRowVertex={(idx, x, y) => {
+              const sp = snap({ x, y })
+              commitRowVertex(idx, sp.x, sp.y)
+            }}
+            activeArcHandlePoints={
+              tool === 'select' &&
+              activeRowPath?.segments?.length === 1 &&
+              (activeRowPath.segments[0] as any)?.type === 'arc'
+                ? (() => {
+                    const seg = activeRowPath.segments[0] as any
+                    const a = pointOnArc(seg, 0)
+                    const b = pointOnArc(seg, 0.5)
+                    const c = pointOnArc(seg, 1)
+                    return [a, b, c]
+                  })()
+                : null
+            }
+            onDragArcHandle={(idx, x, y) => {
+              if (!activeRowId) return
+              if (!activeRowPath?.segments?.length) return
+              const seg = activeRowPath.segments[0] as any
+              if (seg?.type !== 'arc') return
+              const a0 = pointOnArc(seg, 0)
+              const b0 = pointOnArc(seg, 0.5)
+              const c0 = pointOnArc(seg, 1)
+              const sp = snap({ x, y })
+              const a = idx === 0 ? sp : a0
+              const b = idx === 1 ? sp : b0
+              const c = idx === 2 ? sp : c0
+              const arc = arcFrom3Points(a, b, c)
+              if (!arc) return
+              updateRowPath(activeRowId, { segments: [{ type: 'arc', ...arc } as any], gaps: activeRowGaps })
+                .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+            }}
+          />
         )}
       </AppShell.Main>
 
