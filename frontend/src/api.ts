@@ -155,6 +155,7 @@ export async function generateSeatsInSection(
     seat_number_start: number
     seat_type: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
     overwrite: boolean
+    max_seats: number
   },
 ): Promise<{ rows_created: number; seats_created: number }> {
   return await http(`/sections/${sectionId}/generate-seats`, { method: 'POST', body: JSON.stringify(payload) })

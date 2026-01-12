@@ -345,7 +345,20 @@ def generate_seats_in_section(section_id: int, payload: GenerateSectionSeatsRequ
 
     rows_created = 0
     seats_created = 0
-    max_seats = 100_000
+    max_seats = int(payload.max_seats)
+
+    # Pre-flight estimate (area-based) to avoid long loops + late failure.
+    try:
+        area = polygon_area_m2(section_poly)
+        est = int(round(area / max(1e-9, seat_pitch * row_pitch)))
+        if est > max_seats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"too many seats (estimated ~{est} > max_seats={max_seats}); increase pitch/row_pitch/margins or raise max_seats",
+            )
+    except GeometryError:
+        # fall back to runtime checks
+        pass
 
     # Iterate horizontal rows (y increases)
     y = min_y + margin
@@ -373,7 +386,10 @@ def generate_seats_in_section(section_id: int, payload: GenerateSectionSeatsRequ
             seat_num = start_num
             for (sx, sy) in pts_in_row:
                 if seats_created >= max_seats:
-                    raise HTTPException(status_code=400, detail=f"too many seats (>{max_seats}); increase pitch/margins")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"too many seats (>{max_seats}); increase pitch/row_pitch/margins or raise max_seats",
+                    )
                 facing = 0.0
                 if pitch_centroid is not None:
                     facing = angle_deg(sx, sy, pitch_centroid[0], pitch_centroid[1])

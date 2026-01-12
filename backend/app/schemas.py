@@ -130,6 +130,7 @@ class GenerateSectionSeatsRequest(BaseModel):
     seat_number_start: int = Field(ge=1, default=1)
     seat_type: SeatType = SeatType.standard
     overwrite: bool = False
+    max_seats: int = Field(ge=1, le=1_000_000, default=200_000)
 
 
 class SeatTypeBulkUpdate(BaseModel):
