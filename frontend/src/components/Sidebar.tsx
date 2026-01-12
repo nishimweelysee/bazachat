@@ -12,6 +12,7 @@ type Tool =
   | 'seat-place'
   | 'seat-line'
   | 'seat-grid'
+  | 'seat-fill'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -173,6 +174,7 @@ export function Sidebar(props: {
             'seat-place': !props.activeSectionId,
             'seat-line': !props.activeSectionId,
             'seat-grid': !props.activeSectionId,
+            'seat-fill': !props.activeSectionId,
             'seat-poly': !props.activeSectionId,
             'seat-move': false,
             'paint-blocked': !props.configId,

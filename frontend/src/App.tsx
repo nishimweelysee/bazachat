@@ -59,7 +59,7 @@ import {
   type Id,
   type PathSeg,
 } from './api'
-import { arcFrom3Points, closestPointOnSegment, pointOnArc, polygonSelfIntersection, type Pt } from './geometry'
+import { arcFrom3Points, closestPointOnSegment, pointInPolygon, pointOnArc, polygonSelfIntersection, type Pt } from './geometry'
 import { polygonArea } from './geometry'
 import { TopBar } from './components/TopBar'
 import { Sidebar } from './components/Sidebar'
@@ -76,6 +76,7 @@ type Tool =
   | 'seat-place'
   | 'seat-line'
   | 'seat-grid'
+  | 'seat-fill'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -113,6 +114,7 @@ function App() {
   const [draftZonePts, setDraftZonePts] = useState<Pt[]>([])
   const [draftSeatPath, setDraftSeatPath] = useState<Pt[]>([])
   const [draftSeatDots, setDraftSeatDots] = useState<Pt[]>([])
+  const [draftSeatFillPts, setDraftSeatFillPts] = useState<Pt[]>([])
 
   const [seatGridSelecting, setSeatGridSelecting] = useState(false)
   const [seatGridStart, setSeatGridStart] = useState<Pt | null>(null)
@@ -123,6 +125,15 @@ function App() {
   const [seatGridSeatType, setSeatGridSeatType] = useState<SeatType>('standard')
   const [seatGridSeatStart, setSeatGridSeatStart] = useState(1)
   const [seatGridEnforceInside, setSeatGridEnforceInside] = useState(true)
+
+  const [seatFillModalOpen, setSeatFillModalOpen] = useState(false)
+  const [seatFillSeatType, setSeatFillSeatType] = useState<SeatType>('standard')
+  const [seatFillSeatStart, setSeatFillSeatStart] = useState(1)
+  const [seatFillEnforceInside, setSeatFillEnforceInside] = useState(true)
+  const [seatFillPitchX, setSeatFillPitchX] = useState(0.5)
+  const [seatFillPitchY, setSeatFillPitchY] = useState(0.8)
+  const [seatFillAngleDeg, setSeatFillAngleDeg] = useState(0)
+  const [seatFillMaxSeats, setSeatFillMaxSeats] = useState(20000)
 
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [gridStep, setGridStep] = useState(0.1)
@@ -988,6 +999,22 @@ function App() {
       }
       return
     }
+    if (tool === 'seat-fill') {
+      if (draftSeatFillPts.length >= 3) {
+        const poly = draftSeatFillPts.map((p) => [p.x, p.y] as [number, number])
+        const bad = polygonSelfIntersection(poly)
+        if (bad) {
+          notifications.show({ color: 'red', message: `Fill polygon self-intersects near (${bad[0].toFixed(2)}, ${bad[1].toFixed(2)}). Undo/adjust points.` })
+          return
+        }
+        if (polygonArea(poly) <= 1e-6) {
+          notifications.show({ color: 'red', message: 'Fill polygon area is ~0. Adjust points and try again.' })
+          return
+        }
+        setSeatFillModalOpen(true)
+      }
+      return
+    }
   }
 
   function onStageClick(e: any) {
@@ -1049,6 +1076,15 @@ function App() {
 
     if (tool === 'seat-poly') {
       setDraftSeatPath((prev) => [...prev, p])
+      return
+    }
+
+    if (tool === 'seat-fill') {
+      if (draftSeatFillPts.length >= 3 && dist(p, draftSeatFillPts[0]!) <= closeTol) {
+        finishDrawing()
+        return
+      }
+      setDraftSeatFillPts((prev) => [...prev, p])
       return
     }
   }
@@ -1216,6 +1252,7 @@ function App() {
     if (tool === 'draw-row-arc') setDraftArcPts((p) => p.slice(0, -1))
     if (tool === 'draw-zone') setDraftZonePts((p) => p.slice(0, -1))
     if (tool === 'seat-line' || tool === 'seat-poly') setDraftSeatPath((p) => p.slice(0, -1))
+    if (tool === 'seat-fill') setDraftSeatFillPts((p) => p.slice(0, -1))
   }
 
   function cancelDraft() {
@@ -1225,6 +1262,7 @@ function App() {
     setDraftZonePts([])
     setDraftSeatPath([])
     setDraftSeatDots([])
+    setDraftSeatFillPts([])
     setSeatGridSelecting(false)
     setSeatGridStart(null)
     setSeatGridEnd(null)
@@ -1323,6 +1361,82 @@ function App() {
       if (out.length > 5000) break
     }
     return out
+  }
+
+  function rotatedFillPoints(poly: Pt[], pitchX: number, pitchY: number, angleDeg: number, maxSeats: number): Pt[] {
+    const pts = poly.map((p) => [p.x, p.y] as [number, number])
+    if (pts.length < 3) return []
+    const theta = (angleDeg * Math.PI) / 180
+
+    // rotate into grid-aligned space
+    const c = Math.cos(-theta)
+    const s = Math.sin(-theta)
+    const rot = (x: number, y: number) => ({ x: x * c - y * s, y: x * s + y * c })
+
+    // rotate back
+    const ic = Math.cos(theta)
+    const is = Math.sin(theta)
+    const inv = (x: number, y: number) => ({ x: x * ic - y * is, y: x * is + y * ic })
+
+    const rotPoly = pts.map(([x, y]) => {
+      const r = rot(x, y)
+      return [r.x, r.y] as [number, number]
+    })
+
+    let minX = rotPoly[0]![0]
+    let maxX = rotPoly[0]![0]
+    let minY = rotPoly[0]![1]
+    let maxY = rotPoly[0]![1]
+    for (const [x, y] of rotPoly) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+
+    const dx = Math.max(0.05, pitchX)
+    const dy = Math.max(0.05, pitchY)
+    const out: Pt[] = []
+
+    for (let y = minY; y <= maxY + 1e-9; y += dy) {
+      for (let x = minX; x <= maxX + 1e-9; x += dx) {
+        if (out.length >= maxSeats) return out
+        if (!pointInPolygon(rotPoly, x, y)) continue
+        const p0 = inv(x, y)
+        out.push(p0)
+      }
+    }
+    return out
+  }
+
+  useEffect(() => {
+    if (!seatFillModalOpen) return
+    if (!draftSeatFillPts.length) return
+    const pts = rotatedFillPoints(draftSeatFillPts, seatFillPitchX, seatFillPitchY, seatFillAngleDeg, seatFillMaxSeats)
+    setDraftSeatDots(pts)
+    return () => setDraftSeatDots([])
+  }, [seatFillModalOpen, draftSeatFillPts, seatFillPitchX, seatFillPitchY, seatFillAngleDeg, seatFillMaxSeats])
+
+  function commitSeatFill() {
+    if (!activeSectionId) return
+    const pts = rotatedFillPoints(draftSeatFillPts, seatFillPitchX, seatFillPitchY, seatFillAngleDeg, seatFillMaxSeats)
+    if (!pts.length) {
+      notifications.show({ color: 'yellow', message: 'No seats to create (try bigger shape or smaller pitch).' })
+      return
+    }
+    createSeatsInSectionBulk(activeSectionId, {
+      seat_number_start: seatFillSeatStart,
+      enforce_inside: seatFillEnforceInside,
+      items: pts.map((p, i) => ({ x_m: p.x, y_m: p.y, seat_type: seatFillSeatType, seat_number: seatFillSeatStart + i })),
+    })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+        setSeatFillModalOpen(false)
+        setDraftSeatFillPts([])
+        setDraftSeatDots([])
+        notifications.show({ message: 'Seats filled into shape' })
+      })
+      .catch((err) => notifications.show({ color: 'red', message: String(err) }))
   }
 
   function commitSeatDesign() {
@@ -1880,13 +1994,14 @@ function App() {
             if (t === 'draw-row-line') setDraftRowPts([])
             if (t === 'draw-row-arc') setDraftArcPts([])
             if (t === 'draw-zone') setDraftZonePts([])
-            if (t === 'seat-line' || t === 'seat-poly' || t === 'seat-place' || t === 'seat-move') {
+            if (t === 'seat-line' || t === 'seat-poly' || t === 'seat-place' || t === 'seat-move' || t === 'seat-grid' || t === 'seat-fill') {
               setDraftSeatPath([])
               setDraftSeatDots([])
+              setDraftSeatFillPts([])
             }
             setTool(t)
           }}
-          canUndo={(draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length + draftSeatPath.length) > 0}
+          canUndo={(draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length + draftSeatPath.length + draftSeatFillPts.length) > 0}
           onUndo={undo}
           onCancelDraft={cancelDraft}
           snapEnabled={snapEnabled}
@@ -2226,6 +2341,11 @@ function App() {
             draftZoneInvalid={draftZoneInvalid}
             draftSeatDots={draftSeatDots}
             draftSeatPath={draftSeatPath}
+            draftSeatFillPts={draftSeatFillPts}
+            onDragSeatFillPoint={(idx, x, y) => {
+              const sp = snap({ x, y })
+              setDraftSeatFillPts((prev) => prev.map((p, i) => (i === idx ? sp : p)))
+            }}
             seatDragEnabled={tool === 'seat-move'}
             onSeatDragEnd={(seatId, x, y) => {
               const sp = snap({ x, y })
@@ -2474,6 +2594,51 @@ function App() {
             </Button>
             <Button onClick={commitSeatGrid} disabled={!activeSectionId}>
               Create grid
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={seatFillModalOpen} onClose={() => setSeatFillModalOpen(false)} title="Seat fill shape (polygon)">
+        <Stack>
+          <Text size="sm" c="dimmed">
+            Seats will be filled inside the drawn polygon using a rotated grid (dot preview). Drag the polygon vertices to refine.
+          </Text>
+          <Group grow>
+            <NumberInput label="Pitch X (m)" value={seatFillPitchX} onChange={(v) => setSeatFillPitchX(Number(v ?? 0.5))} decimalScale={2} min={0.05} />
+            <NumberInput label="Pitch Y (m)" value={seatFillPitchY} onChange={(v) => setSeatFillPitchY(Number(v ?? 0.8))} decimalScale={2} min={0.05} />
+          </Group>
+          <NumberInput label="Angle (deg)" value={seatFillAngleDeg} onChange={(v) => setSeatFillAngleDeg(Number(v ?? 0))} decimalScale={1} />
+          <Select
+            label="Seat type"
+            value={seatFillSeatType}
+            onChange={(v) => setSeatFillSeatType(((v as SeatType) ?? 'standard') as SeatType)}
+            data={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'aisle', label: 'Aisle' },
+              { value: 'wheelchair', label: 'Wheelchair' },
+              { value: 'companion', label: 'Companion' },
+              { value: 'rail', label: 'Rail' },
+              { value: 'standing', label: 'Standing' },
+            ]}
+          />
+          <Group grow>
+            <NumberInput label="Seat number start" value={seatFillSeatStart} onChange={(v) => setSeatFillSeatStart(Math.max(1, Number(v ?? 1)))} min={1} />
+            <NumberInput label="Max preview seats" value={seatFillMaxSeats} onChange={(v) => setSeatFillMaxSeats(Math.max(1, Number(v ?? 20000)))} min={1} max={200000} />
+          </Group>
+          <Switch label="Enforce inside section polygon" checked={seatFillEnforceInside} onChange={(e) => setSeatFillEnforceInside(e.currentTarget.checked)} />
+          <Group grow>
+            <Button
+              variant="light"
+              onClick={() => {
+                setSeatFillModalOpen(false)
+                setDraftSeatDots([])
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={commitSeatFill} disabled={!activeSectionId}>
+              Fill seats
             </Button>
           </Group>
         </Stack>

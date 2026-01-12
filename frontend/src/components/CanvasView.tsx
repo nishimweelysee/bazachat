@@ -66,6 +66,8 @@ export function CanvasView(props: {
   draftZoneInvalid: boolean
   draftSeatDots: Array<{ x: number; y: number }>
   draftSeatPath: Array<{ x: number; y: number }>
+  draftSeatFillPts: Array<{ x: number; y: number }>
+  onDragSeatFillPoint: (idx: number, x: number, y: number) => void
   seatDragEnabled: boolean
   onSeatDragEnd: (seatId: Id, x: number, y: number) => void
 
@@ -343,6 +345,33 @@ export function CanvasView(props: {
           {props.draftArcPts.map((p, i) => <Circle key={`arcpt-${i}`} x={p.x} y={p.y} radius={0.15} fill="#f97316" />)}
 
           {/* Seat design drafts (dots + dashed path) */}
+          {props.draftSeatFillPts.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld
+                  ? [...props.draftSeatFillPts.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
+                  : props.draftSeatFillPts.map((p) => [p.x, p.y]),
+              )}
+              stroke="rgba(226,232,240,0.75)"
+              strokeWidth={1.5}
+              dash={dash}
+              closed={props.draftSeatFillPts.length >= 3 && !props.cursorWorld}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+          {props.draftSeatFillPts.map((p, idx) => (
+            <Circle
+              key={`seatfill-h-${idx}`}
+              x={p.x}
+              y={p.y}
+              radius={0.18}
+              fill="#e2e8f0"
+              draggable
+              onDragEnd={(e) => props.onDragSeatFillPoint(idx, e.target.x(), e.target.y())}
+            />
+          ))}
+
           {props.draftSeatPath.length >= 1 && (
             <Line
               points={toPoints(

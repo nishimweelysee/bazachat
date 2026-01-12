@@ -148,6 +148,35 @@ export function polygonSelfIntersection(points: Array<[number, number]>): [numbe
   return null
 }
 
+export function pointInPolygon(points: Array<[number, number]>, x: number, y: number): boolean {
+  // Ray casting; returns true for inside, false for outside.
+  // Treat points on boundary as inside (good for seat fill).
+  const n = points.length
+  if (n < 3) return false
+  let inside = false
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = points[i]![0]
+    const yi = points[i]![1]
+    const xj = points[j]![0]
+    const yj = points[j]![1]
+
+    // check boundary collinearity
+    const cross = (x - xi) * (yj - yi) - (y - yi) * (xj - xi)
+    const eps = 1e-9
+    if (Math.abs(cross) <= eps) {
+      const minX = Math.min(xi, xj) - eps
+      const maxX = Math.max(xi, xj) + eps
+      const minY = Math.min(yi, yj) - eps
+      const maxY = Math.max(yi, yj) + eps
+      if (x >= minX && x <= maxX && y >= minY && y <= maxY) return true
+    }
+
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 0.0) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
 // Create an arc segment from 3 points (start, mid, end).
 // Returns null if the points are collinear / circle can't be determined.
 export function arcFrom3Points(a: Pt, b: Pt, c: Pt):
