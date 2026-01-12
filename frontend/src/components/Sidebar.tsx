@@ -43,6 +43,7 @@ export function Sidebar(props: {
   onAddLevel: () => void
   onGenerateSeats: () => void
   onGenerateSeatsInSection: () => void
+  onGenerateSeatsForSectionRows: () => void
   onDeleteActiveRow: () => void
   onDeleteActiveSection: () => void
   onDeleteActiveLevel: () => void
@@ -128,6 +129,12 @@ export function Sidebar(props: {
         <Tooltip label="Generate seats along the active row">
           <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
             Generate seats
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Generate seats for all rows in the active section">
+          <Button variant="light" disabled={!props.activeSectionId} onClick={props.onGenerateSeatsForSectionRows}>
+            Generate seats (all rows)
           </Button>
         </Tooltip>
 
