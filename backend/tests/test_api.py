@@ -83,10 +83,28 @@ class TestVenueSeatingAPI(unittest.TestCase):
                 "seat_number_start": 1,
                 "seat_type": "standard",
                 "overwrite": True,
+                "max_seats": 200000,
             },
         ).json()
         self.assertGreaterEqual(gen2.get("rows_created", 0), 1)
         self.assertGreater(gen2.get("seats_created", 0), 0)
+
+        # Manual seat design: bulk create + drag update
+        created = c.post(
+            f"/sections/{section_id}/seats/bulk",
+            json={
+                "seat_number_start": 1,
+                "enforce_inside": True,
+                "items": [
+                    {"x_m": 2.0, "y_m": 2.0, "seat_type": "standard"},
+                    {"x_m": 3.0, "y_m": 2.0, "seat_type": "wheelchair"},
+                ],
+            },
+        ).json()
+        self.assertEqual(created["created"], 2)
+        sid = created["seat_ids"][0]
+        upd = c.put(f"/seats/{sid}", json={"x_m": 2.5, "y_m": 2.5}).json()
+        self.assertEqual(upd, {"updated": True})
 
         # Bulk block first 2 seats
         seat_ids = [seats[0]["id"], seats[1]["id"]] if len(seats) >= 2 else [seats[0]["id"]]

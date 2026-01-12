@@ -138,6 +138,32 @@ class SeatTypeBulkUpdate(BaseModel):
     seat_type: SeatType
 
 
+class SeatCreate(BaseModel):
+    x_m: float
+    y_m: float
+    z_m: float = 0.0
+    facing_deg: float = 0.0
+    seat_type: SeatType = SeatType.standard
+    seat_number: Optional[int] = None
+
+
+class SeatBulkCreate(BaseModel):
+    items: list[SeatCreate] = Field(min_length=1)
+    # If seat_number is omitted for an item, it will be auto-assigned starting from this value.
+    seat_number_start: int = Field(ge=1, default=1)
+    # If true, reject points outside the section polygon.
+    enforce_inside: bool = True
+
+
+class SeatUpdate(BaseModel):
+    x_m: Optional[float] = None
+    y_m: Optional[float] = None
+    z_m: Optional[float] = None
+    facing_deg: Optional[float] = None
+    seat_type: Optional[SeatType] = None
+    seat_number: Optional[int] = Field(default=None, ge=1)
+
+
 class ConfigCreate(BaseModel):
     name: str
 

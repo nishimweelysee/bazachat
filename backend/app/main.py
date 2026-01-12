@@ -32,7 +32,9 @@ from .schemas import (
     RowCreate,
     RowMetrics,
     RowUpdate,
+  SeatBulkCreate,
   SeatTypeBulkUpdate,
+  SeatUpdate,
     SeatOverrideUpsert,
     SeatOverrideBulkUpsert,
     SeatOverrideBatchUpsert,
@@ -77,6 +79,23 @@ def _delete_seats_for_row_ids(session: Session, row_ids: list[int]) -> None:
     seat_ids_int = [int(x) for x in seat_ids if x is not None]
     _delete_seat_overrides_for_seat_ids(session, seat_ids_int)
     session.exec(delete(Seat).where(Seat.row_id.in_(row_ids)))
+
+
+def _get_or_create_manual_row(session: Session, section_id: int, *, near_x: float, near_y: float) -> Row:
+    """
+    Seats are currently modeled as belonging to a Row.
+    For manual seat design (drag/plot dots), we attach seats to a hidden row per section.
+    """
+    existing = session.exec(select(Row).where(Row.section_id == section_id, Row.label == "__MANUAL__")).first()
+    if existing:
+        return existing
+    # Tiny non-zero line segment so the row can be visualized if needed.
+    path = {"segments": [{"type": "line", "x1": near_x, "y1": near_y, "x2": near_x + 0.01, "y2": near_y}], "gaps": []}
+    r = Row(section_id=section_id, label="__MANUAL__", order_index=-1000, geom_json=json.dumps(path))
+    session.add(r)
+    session.commit()
+    session.refresh(r)
+    return r
 
 
 @app.get("/health")
@@ -427,6 +446,79 @@ def bulk_update_seat_type(payload: SeatTypeBulkUpdate, session: Session = Depend
         updated += 1
     session.commit()
     return {"updated": updated}
+
+
+@app.post("/sections/{section_id}/seats/bulk")
+def create_seats_bulk(section_id: int, payload: SeatBulkCreate, session: Session = Depends(_session)) -> dict:
+    sec = session.get(Section, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="section not found")
+    section_poly = [(float(x), float(y)) for [x, y] in json.loads(sec.geom_json)]
+
+    first = payload.items[0]
+    manual_row = _get_or_create_manual_row(session, section_id, near_x=float(first.x_m), near_y=float(first.y_m))
+
+    # Determine starting seat number: max(existing in this manual row)+1, unless seat_number_start is higher.
+    existing_max = session.exec(select(Seat.seat_number).where(Seat.row_id == int(manual_row.id)).order_by(Seat.seat_number.desc()).limit(1)).first()
+    auto_next = int(existing_max or 0) + 1
+    next_num = max(auto_next, int(payload.seat_number_start))
+
+    created_ids: list[int] = []
+    for it in payload.items:
+        x = float(it.x_m)
+        y = float(it.y_m)
+        if payload.enforce_inside and not polygon_contains_point(section_poly, x, y):
+            raise HTTPException(status_code=400, detail=f"seat point outside section polygon: ({x}, {y})")
+        seat_number = int(it.seat_number) if it.seat_number is not None else next_num
+        if it.seat_number is None:
+            next_num += 1
+        s = Seat(
+            row_id=int(manual_row.id),
+            seat_number=seat_number,
+            x_m=x,
+            y_m=y,
+            z_m=float(it.z_m or 0.0),
+            facing_deg=float(it.facing_deg or 0.0),
+            seat_type=it.seat_type,
+        )
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        created_ids.append(int(s.id))
+    return {"created": len(created_ids), "seat_ids": created_ids, "row_id": int(manual_row.id)}
+
+
+@app.put("/seats/{seat_id}")
+def update_seat(seat_id: int, payload: SeatUpdate, session: Session = Depends(_session)) -> dict:
+    seat = session.get(Seat, seat_id)
+    if not seat:
+        raise HTTPException(status_code=404, detail="seat not found")
+    if payload.x_m is not None:
+        seat.x_m = float(payload.x_m)
+    if payload.y_m is not None:
+        seat.y_m = float(payload.y_m)
+    if payload.z_m is not None:
+        seat.z_m = float(payload.z_m)
+    if payload.facing_deg is not None:
+        seat.facing_deg = float(payload.facing_deg)
+    if payload.seat_type is not None:
+        seat.seat_type = payload.seat_type
+    if payload.seat_number is not None:
+        seat.seat_number = int(payload.seat_number)
+    session.add(seat)
+    session.commit()
+    return {"updated": True}
+
+
+@app.delete("/seats/{seat_id}")
+def delete_seat(seat_id: int, session: Session = Depends(_session)) -> dict:
+    seat = session.get(Seat, seat_id)
+    if not seat:
+        raise HTTPException(status_code=404, detail="seat not found")
+    _delete_seat_overrides_for_seat_ids(session, [int(seat_id)])
+    session.delete(seat)
+    session.commit()
+    return {"deleted": True}
 
 
 @app.post("/venues/{venue_id}/configs")

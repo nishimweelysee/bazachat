@@ -64,6 +64,10 @@ export function CanvasView(props: {
   cursorWorld: { x: number; y: number } | null
   draftPolygonInvalid: boolean
   draftZoneInvalid: boolean
+  draftSeatDots: Array<{ x: number; y: number }>
+  draftSeatPath: Array<{ x: number; y: number }>
+  seatDragEnabled: boolean
+  onSeatDragEnd: (seatId: Id, x: number, y: number) => void
 
   sections: any[]
   zones: any[]
@@ -333,7 +337,27 @@ export function CanvasView(props: {
           )}
           {props.draftArcPts.map((p, i) => <Circle key={`arcpt-${i}`} x={p.x} y={p.y} radius={0.15} fill="#f97316" />)}
 
+          {/* Seat design drafts (dots + dashed path) */}
+          {props.draftSeatPath.length >= 1 && (
+            <Line
+              points={toPoints(
+                props.cursorWorld
+                  ? [...props.draftSeatPath.map((p) => [p.x, p.y] as [number, number]), [props.cursorWorld.x, props.cursorWorld.y]]
+                  : props.draftSeatPath.map((p) => [p.x, p.y]),
+              )}
+              stroke="rgba(226,232,240,0.7)"
+              strokeWidth={1.2}
+              dash={dash}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+          {props.draftSeatDots.map((p, i) => (
+            <Circle key={`seatdraft-${i}`} x={p.x} y={p.y} radius={0.14} fill="#e2e8f0" opacity={0.9} />
+          ))}
+
           {props.rows.map((r) => {
+            if (String((r as any).label ?? '') === '__MANUAL__') return null
             const isActive = props.activeRowId === (r.id as Id)
             const path = JSON.parse(r.geom_json as string) as { segments: PathSeg[] }
             const pts: Array<[number, number]> = []
@@ -388,6 +412,8 @@ export function CanvasView(props: {
                 opacity={isInActiveRow ? 1 : 0.4}
                 stroke={isSelected ? '#a78bfa' : stroke}
                 strokeWidth={isSelected ? 0.06 : stroke ? 0.05 : 0}
+                draggable={props.seatDragEnabled}
+                onDragEnd={(e) => props.onSeatDragEnd(seatId, e.target.x(), e.target.y())}
                 onMouseEnter={() => props.onSeatHover(seatId)}
                 onMouseLeave={() => props.onSeatHover(null)}
                 onClick={(e) => {

@@ -9,6 +9,10 @@ type Tool =
   | 'draw-row-line'
   | 'draw-row-arc'
   | 'draw-zone'
+  | 'seat-place'
+  | 'seat-line'
+  | 'seat-poly'
+  | 'seat-move'
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
@@ -41,9 +45,6 @@ export function Sidebar(props: {
   setGridStep: (v: number) => void
 
   onAddLevel: () => void
-  onGenerateSeats: () => void
-  onGenerateSeatsInSection: () => void
-  onGenerateSeatsForSectionRows: () => void
   onDeleteActiveRow: () => void
   onDeleteActiveSection: () => void
   onDeleteActiveLevel: () => void
@@ -126,24 +127,6 @@ export function Sidebar(props: {
           />
         </Tooltip>
 
-        <Tooltip label="Generate seats along the active row">
-          <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
-            Generate seats
-          </Button>
-        </Tooltip>
-
-        <Tooltip label="Generate seats for all rows in the active section">
-          <Button variant="light" disabled={!props.activeSectionId} onClick={props.onGenerateSeatsForSectionRows}>
-            Generate seats (all rows)
-          </Button>
-        </Tooltip>
-
-        <Tooltip label="Generate seats by filling the active section polygon (grid)">
-          <Button variant="light" disabled={!props.activeSectionId} onClick={props.onGenerateSeatsInSection}>
-            Generate seats in section
-          </Button>
-        </Tooltip>
-
         <Tooltip label="Delete pitch/stage polygon">
           <Button color="red" variant="light" disabled={!props.venueId || !props.hasPitch} onClick={props.onDeletePitch}>
             Delete pitch
@@ -186,6 +169,10 @@ export function Sidebar(props: {
             'draw-row-line': !props.activeSectionId,
             'draw-row-arc': !props.activeSectionId,
             'draw-zone': !props.activeSectionId,
+            'seat-place': !props.activeSectionId,
+            'seat-line': !props.activeSectionId,
+            'seat-poly': !props.activeSectionId,
+            'seat-move': false,
             'paint-blocked': !props.configId,
             'paint-kill': !props.configId,
             'paint-sellable': !props.configId,

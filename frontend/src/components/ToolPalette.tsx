@@ -2,6 +2,9 @@ import { ActionIcon, Group, Tooltip } from '@mantine/core'
 import {
   IconBrush,
   IconCircle,
+  IconDots,
+  IconHandMove,
+  IconLine,
   IconPolygon,
   IconRoute,
   IconSofa,
@@ -16,6 +19,10 @@ type Tool =
   | 'draw-row-line'
   | 'draw-row-arc'
   | 'draw-zone'
+  | 'seat-place'
+  | 'seat-line'
+  | 'seat-poly'
+  | 'seat-move'
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
@@ -34,6 +41,14 @@ function toolIcon(tool: Tool) {
       return <IconCircle size={18} />
     case 'draw-zone':
       return <IconSofa size={18} />
+    case 'seat-place':
+      return <IconDots size={18} />
+    case 'seat-line':
+      return <IconLine size={18} />
+    case 'seat-poly':
+      return <IconRoute size={18} />
+    case 'seat-move':
+      return <IconHandMove size={18} />
     case 'paint-blocked':
       return <IconBrush size={18} />
     case 'paint-kill':
@@ -55,6 +70,10 @@ export function ToolPalette(props: {
     { tool: 'draw-row-line', label: 'Draw row (polyline)' },
     { tool: 'draw-row-arc', label: 'Draw row (arc)' },
     { tool: 'draw-zone', label: 'Draw standing zone' },
+    { tool: 'seat-place', label: 'Seat: place dots' },
+    { tool: 'seat-line', label: 'Seat: line / column' },
+    { tool: 'seat-poly', label: 'Seat: any shape (polyline)' },
+    { tool: 'seat-move', label: 'Seat: drag/move' },
     { tool: 'paint-blocked', label: 'Paint: blocked' },
     { tool: 'paint-kill', label: 'Paint: kill' },
     { tool: 'paint-sellable', label: 'Paint: sellable (clear)' },

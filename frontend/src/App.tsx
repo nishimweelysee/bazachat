@@ -34,6 +34,8 @@ import {
   generateSeats,
   generateSeatsInSection,
   bulkUpdateSeatType,
+  createSeatsInSectionBulk,
+  updateSeat,
   getRowMetrics,
   getVenueSummary,
   getVenueSummaryBreakdown,
@@ -69,6 +71,10 @@ type Tool =
   | 'draw-row-line'
   | 'draw-row-arc'
   | 'draw-zone'
+  | 'seat-place'
+  | 'seat-line'
+  | 'seat-poly'
+  | 'seat-move'
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
@@ -102,6 +108,8 @@ function App() {
   const [draftRowPts, setDraftRowPts] = useState<Pt[]>([])
   const [draftArcPts, setDraftArcPts] = useState<Pt[]>([])
   const [draftZonePts, setDraftZonePts] = useState<Pt[]>([])
+  const [draftSeatPath, setDraftSeatPath] = useState<Pt[]>([])
+  const [draftSeatDots, setDraftSeatDots] = useState<Pt[]>([])
 
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [gridStep, setGridStep] = useState(0.1)
@@ -132,6 +140,14 @@ function App() {
   const [cursorWorld, setCursorWorld] = useState<Pt | null>(null)
 
   const [selectedSeatIds, setSelectedSeatIds] = useState<Set<Id>>(new Set())
+
+  const [seatDesignType, setSeatDesignType] = useState<SeatType>('standard')
+  const [seatDesignStart, setSeatDesignStart] = useState(1)
+  const [seatDesignCount, setSeatDesignCount] = useState(10)
+  const [seatDesignPitch, setSeatDesignPitch] = useState(0.5)
+  const [seatDesignModalOpen, setSeatDesignModalOpen] = useState(false)
+  const [seatDesignMode, setSeatDesignMode] = useState<'line' | 'poly'>('line')
+  const [seatEnforceInside, setSeatEnforceInside] = useState(true)
 
   type OverrideStatus = 'sellable' | 'blocked' | 'kill'
   type PaintAction = { configId: Id; before: Array<{ seat_id: Id; status: OverrideStatus }>; after: Array<{ seat_id: Id; status: OverrideStatus }> }
@@ -821,6 +837,7 @@ function App() {
     .map((s) => ({ value: String(s.id), label: s.code }))
   const rowOptions = rows
     .filter((r) => (activeSectionId ? r.section_id === activeSectionId : true))
+    .filter((r) => String((r as any).label ?? '') !== '__MANUAL__')
     .map((r) => ({ value: String(r.id), label: r.label }))
 
   function snap(p: Pt): Pt {
@@ -950,6 +967,13 @@ function App() {
       if (draftArcPts.length === 3) setCreateRowOpen(true)
       return
     }
+    if (tool === 'seat-poly') {
+      if (draftSeatPath.length >= 2) {
+        setSeatDesignMode('poly')
+        setSeatDesignModalOpen(true)
+      }
+      return
+    }
   }
 
   function onStageClick(e: any) {
@@ -984,6 +1008,33 @@ function App() {
 
     if (tool === 'draw-row-arc') {
       setDraftArcPts((prev) => (prev.length >= 3 ? [p] : [...prev, p]))
+      return
+    }
+
+    if (tool === 'seat-place') {
+      if (!activeSectionId) return
+      createSeatsInSectionBulk(activeSectionId, {
+        seat_number_start: seatDesignStart,
+        enforce_inside: seatEnforceInside,
+        items: [{ x_m: p.x, y_m: p.y, seat_type: seatDesignType }],
+      })
+        .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+        .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+      return
+    }
+
+    if (tool === 'seat-line') {
+      setSeatDesignMode('line')
+      setDraftSeatPath((prev) => {
+        const next = prev.length >= 2 ? [p] : [...prev, p]
+        if (next.length === 2) setSeatDesignModalOpen(true)
+        return next
+      })
+      return
+    }
+
+    if (tool === 'seat-poly') {
+      setDraftSeatPath((prev) => [...prev, p])
       return
     }
   }
@@ -1130,6 +1181,8 @@ function App() {
     if (tool === 'draw-pitch' || tool === 'draw-section') setDraftPts((p) => p.slice(0, -1))
     if (tool === 'draw-row-line') setDraftRowPts((p) => p.slice(0, -1))
     if (tool === 'draw-row-arc') setDraftArcPts((p) => p.slice(0, -1))
+    if (tool === 'draw-zone') setDraftZonePts((p) => p.slice(0, -1))
+    if (tool === 'seat-line' || tool === 'seat-poly') setDraftSeatPath((p) => p.slice(0, -1))
   }
 
   function cancelDraft() {
@@ -1137,6 +1190,76 @@ function App() {
     setDraftRowPts([])
     setDraftArcPts([])
     setDraftZonePts([])
+    setDraftSeatPath([])
+    setDraftSeatDots([])
+  }
+
+  function pointsAlongLine(a: Pt, b: Pt, count: number): Pt[] {
+    const n = Math.max(1, Math.floor(count))
+    if (n === 1) return [a]
+    const pts: Pt[] = []
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1)
+      pts.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
+    }
+    return pts
+  }
+
+  function pointsAlongPolyline(poly: Pt[], pitch: number): Pt[] {
+    const out: Pt[] = []
+    if (poly.length < 2) return out
+    const step = Math.max(0.05, pitch)
+    let segIdx = 0
+    let segT = 0
+    let cur = { ...poly[0]! }
+    out.push(cur)
+
+    const segLen = (i: number) => Math.hypot(poly[i + 1]!.x - poly[i]!.x, poly[i + 1]!.y - poly[i]!.y)
+    let remainingInSeg = segLen(0)
+
+    while (segIdx < poly.length - 1) {
+      if (remainingInSeg >= step) {
+        segT += step / remainingInSeg
+        const a = poly[segIdx]!
+        const b = poly[segIdx + 1]!
+        cur = { x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT }
+        out.push(cur)
+        remainingInSeg = remainingInSeg - step
+      } else {
+        segIdx += 1
+        segT = 0
+        if (segIdx >= poly.length - 1) break
+        remainingInSeg = segLen(segIdx)
+      }
+      if (out.length > 5000) break
+    }
+    return out
+  }
+
+  function commitSeatDesign() {
+    if (!activeSectionId) return
+    let pts: Pt[] = []
+    if (seatDesignMode === 'line') {
+      if (draftSeatPath.length < 2) return
+      pts = pointsAlongLine(draftSeatPath[0]!, draftSeatPath[1]!, seatDesignCount)
+    } else {
+      if (draftSeatPath.length < 2) return
+      pts = pointsAlongPolyline(draftSeatPath, seatDesignPitch)
+    }
+    setDraftSeatDots(pts)
+    createSeatsInSectionBulk(activeSectionId, {
+      seat_number_start: seatDesignStart,
+      enforce_inside: seatEnforceInside,
+      items: pts.map((q) => ({ x_m: q.x, y_m: q.y, seat_type: seatDesignType })),
+    })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+        setSeatDesignModalOpen(false)
+        setDraftSeatPath([])
+        setDraftSeatDots([])
+        notifications.show({ message: 'Seats created' })
+      })
+      .catch((err) => notifications.show({ color: 'red', message: String(err) }))
   }
 
   function makeUniqueCopyName(base: string, existing: Set<string>): string {
@@ -1651,9 +1774,13 @@ function App() {
             if (t === 'draw-row-line') setDraftRowPts([])
             if (t === 'draw-row-arc') setDraftArcPts([])
             if (t === 'draw-zone') setDraftZonePts([])
+            if (t === 'seat-line' || t === 'seat-poly' || t === 'seat-place' || t === 'seat-move') {
+              setDraftSeatPath([])
+              setDraftSeatDots([])
+            }
             setTool(t)
           }}
-          canUndo={(draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length) > 0}
+          canUndo={(draftPts.length + draftRowPts.length + draftArcPts.length + draftZonePts.length + draftSeatPath.length) > 0}
           onUndo={undo}
           onCancelDraft={cancelDraft}
           snapEnabled={snapEnabled}
@@ -1661,9 +1788,6 @@ function App() {
           gridStep={gridStep}
           setGridStep={setGridStep}
           onAddLevel={() => setCreateLevelOpen(true)}
-          onGenerateSeats={() => setGenSeatsOpen(true)}
-          onGenerateSeatsForSectionRows={() => setGenSectionRowsSeatsOpen(true)}
-          onGenerateSeatsInSection={() => setGenSectionSeatsOpen(true)}
           hasPitch={Boolean(pitchPoints?.length)}
           onDeletePitch={() => {
             if (!venueId) return
@@ -1994,6 +2118,15 @@ function App() {
             cursorWorld={cursorWorld}
             draftPolygonInvalid={draftPolygonInvalid}
             draftZoneInvalid={draftZoneInvalid}
+            draftSeatDots={draftSeatDots}
+            draftSeatPath={draftSeatPath}
+            seatDragEnabled={tool === 'seat-move'}
+            onSeatDragEnd={(seatId, x, y) => {
+              const sp = snap({ x, y })
+              updateSeat(seatId, { x_m: sp.x, y_m: sp.y })
+                .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+            }}
             sections={sections}
             zones={zones}
             rows={rows}
@@ -2131,6 +2264,43 @@ function App() {
           <Text size="sm" c="dimmed">
             Drag a rectangle to paint many seats. Shift-drag to add seats to selection, then apply Block/Kill/Clear.
           </Text>
+          <Text fw={700} mt="sm">
+            Seat design
+          </Text>
+          <Text size="sm" c="dimmed">
+            Use Seat tools to place dots, draw a line/column, or draw a polyline. Use Seat: drag/move to adjust seats by dragging.
+          </Text>
+        </Stack>
+      </Modal>
+
+      <Modal opened={seatDesignModalOpen} onClose={() => setSeatDesignModalOpen(false)} title="Seat design">
+        <Stack>
+          <Select
+            label="Seat type"
+            value={seatDesignType}
+            onChange={(v) => setSeatDesignType(((v as SeatType) ?? 'standard') as SeatType)}
+            data={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'aisle', label: 'Aisle' },
+              { value: 'wheelchair', label: 'Wheelchair' },
+              { value: 'companion', label: 'Companion' },
+              { value: 'rail', label: 'Rail' },
+              { value: 'standing', label: 'Standing' },
+            ]}
+          />
+          <NumberInput label="Seat number start" value={seatDesignStart} onChange={(v) => setSeatDesignStart(Number(v ?? 1))} min={1} />
+          <Switch label="Enforce inside section polygon" checked={seatEnforceInside} onChange={(e) => setSeatEnforceInside(e.currentTarget.checked)} />
+          {seatDesignMode === 'line' ? (
+            <NumberInput label="Count (single row/column)" value={seatDesignCount} onChange={(v) => setSeatDesignCount(Number(v ?? 10))} min={1} />
+          ) : (
+            <NumberInput label="Pitch (m) along path" value={seatDesignPitch} onChange={(v) => setSeatDesignPitch(Number(v ?? 0.5))} decimalScale={2} min={0.05} />
+          )}
+          <Group grow>
+            <Button variant="light" onClick={() => { setSeatDesignModalOpen(false); setDraftSeatPath([]); setDraftSeatDots([]) }}>
+              Cancel
+            </Button>
+            <Button onClick={commitSeatDesign}>Create seats</Button>
+          </Group>
         </Stack>
       </Modal>
 

@@ -167,6 +167,35 @@ export async function bulkUpdateSeatType(
   return await http(`/seats/types/bulk`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
+export async function createSeatsInSectionBulk(
+  sectionId: Id,
+  payload: {
+    seat_number_start: number
+    enforce_inside: boolean
+    items: Array<{
+      x_m: number
+      y_m: number
+      z_m?: number
+      facing_deg?: number
+      seat_type: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
+      seat_number?: number
+    }>
+  },
+): Promise<{ created: number; seat_ids: Id[]; row_id: Id }> {
+  return await http(`/sections/${sectionId}/seats/bulk`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function updateSeat(
+  seatId: Id,
+  payload: { x_m?: number; y_m?: number; z_m?: number; facing_deg?: number; seat_type?: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'; seat_number?: number },
+): Promise<{ updated: boolean }> {
+  return await http(`/seats/${seatId}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+
+export async function deleteSeat(seatId: Id): Promise<{ deleted: boolean }> {
+  return await http(`/seats/${seatId}`, { method: 'DELETE' })
+}
+
 export async function createConfig(venueId: Id, payload: { name: string }): Promise<{ id: Id; name: string }> {
   return await http(`/venues/${venueId}/configs`, { method: 'POST', body: JSON.stringify(payload) })
 }
