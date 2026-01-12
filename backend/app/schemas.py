@@ -164,6 +164,20 @@ class SeatUpdate(BaseModel):
     seat_number: Optional[int] = Field(default=None, ge=1)
 
 
+class SeatPositionUpdateItem(BaseModel):
+    seat_id: int
+    x_m: float
+    y_m: float
+
+
+class SeatPositionsBulkUpdate(BaseModel):
+    items: list[SeatPositionUpdateItem] = Field(min_length=1)
+
+
+class SeatBulkDelete(BaseModel):
+    seat_ids: list[int] = Field(min_length=1)
+
+
 class ConfigCreate(BaseModel):
     name: str
 

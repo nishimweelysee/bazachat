@@ -33,6 +33,8 @@ from .schemas import (
     RowMetrics,
     RowUpdate,
   SeatBulkCreate,
+  SeatBulkDelete,
+  SeatPositionsBulkUpdate,
   SeatTypeBulkUpdate,
   SeatUpdate,
     SeatOverrideUpsert,
@@ -519,6 +521,42 @@ def delete_seat(seat_id: int, session: Session = Depends(_session)) -> dict:
     session.delete(seat)
     session.commit()
     return {"deleted": True}
+
+
+@app.put("/seats/positions/bulk")
+def bulk_update_seat_positions(payload: SeatPositionsBulkUpdate, session: Session = Depends(_session)) -> dict:
+    seat_ids = sorted(set(int(it.seat_id) for it in payload.items))
+    seats = session.exec(select(Seat).where(Seat.id.in_(seat_ids))).all()
+    by_id = {int(s.id): s for s in seats if s.id is not None}
+    missing = [sid for sid in seat_ids if sid not in by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail={"message": "some seats not found", "missing_seat_ids": missing[:50]})
+
+    updated = 0
+    for it in payload.items:
+        s = by_id.get(int(it.seat_id))
+        if not s:
+            continue
+        s.x_m = float(it.x_m)
+        s.y_m = float(it.y_m)
+        session.add(s)
+        updated += 1
+    session.commit()
+    return {"updated": updated}
+
+
+@app.delete("/seats/bulk/delete")
+def bulk_delete_seats(payload: SeatBulkDelete, session: Session = Depends(_session)) -> dict:
+    seat_ids = sorted(set(int(x) for x in payload.seat_ids))
+    existing = session.exec(select(Seat.id).where(Seat.id.in_(seat_ids))).all()
+    found = {int(x) for x in existing if x is not None}
+    missing = [sid for sid in seat_ids if sid not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail={"message": "some seats not found", "missing_seat_ids": missing[:50]})
+    _delete_seat_overrides_for_seat_ids(session, seat_ids)
+    session.exec(delete(Seat).where(Seat.id.in_(seat_ids)))
+    session.commit()
+    return {"deleted": len(seat_ids)}
 
 
 @app.post("/venues/{venue_id}/configs")

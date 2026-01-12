@@ -196,6 +196,15 @@ export async function deleteSeat(seatId: Id): Promise<{ deleted: boolean }> {
   return await http(`/seats/${seatId}`, { method: 'DELETE' })
 }
 
+export async function bulkUpdateSeatPositions(payload: { items: Array<{ seat_id: Id; x_m: number; y_m: number }> }): Promise<{ updated: number }> {
+  return await http(`/seats/positions/bulk`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+
+export async function bulkDeleteSeats(payload: { seat_ids: Id[] }): Promise<{ deleted: number }> {
+  // must not collide with /seats/{seat_id}
+  return await http(`/seats/bulk/delete`, { method: 'DELETE', body: JSON.stringify(payload) })
+}
+
 export async function createConfig(venueId: Id, payload: { name: string }): Promise<{ id: Id; name: string }> {
   return await http(`/venues/${venueId}/configs`, { method: 'POST', body: JSON.stringify(payload) })
 }

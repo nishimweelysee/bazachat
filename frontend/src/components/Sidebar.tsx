@@ -11,6 +11,7 @@ type Tool =
   | 'draw-zone'
   | 'seat-place'
   | 'seat-line'
+  | 'seat-grid'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -171,6 +172,7 @@ export function Sidebar(props: {
             'draw-zone': !props.activeSectionId,
             'seat-place': !props.activeSectionId,
             'seat-line': !props.activeSectionId,
+            'seat-grid': !props.activeSectionId,
             'seat-poly': !props.activeSectionId,
             'seat-move': false,
             'paint-blocked': !props.configId,

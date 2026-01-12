@@ -106,6 +106,18 @@ class TestVenueSeatingAPI(unittest.TestCase):
         upd = c.put(f"/seats/{sid}", json={"x_m": 2.5, "y_m": 2.5}).json()
         self.assertEqual(upd, {"updated": True})
 
+        # Bulk move selected seats
+        sid2 = created["seat_ids"][1]
+        moved = c.put(
+            "/seats/positions/bulk",
+            json={"items": [{"seat_id": sid, "x_m": 2.6, "y_m": 2.6}, {"seat_id": sid2, "x_m": 3.6, "y_m": 2.6}]},
+        ).json()
+        self.assertGreaterEqual(moved.get("updated", 0), 2)
+
+        # Bulk delete seats
+        deleted = c.request("DELETE", "/seats/bulk/delete", json={"seat_ids": [sid, sid2]}).json()
+        self.assertGreaterEqual(deleted.get("deleted", 0), 2)
+
         # Bulk block first 2 seats
         seat_ids = [seats[0]["id"], seats[1]["id"]] if len(seats) >= 2 else [seats[0]["id"]]
         res = c.put(f"/configs/{config_id}/overrides/bulk", json={"seat_ids": seat_ids, "status": "blocked"}).json()

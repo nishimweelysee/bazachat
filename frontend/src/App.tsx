@@ -36,6 +36,8 @@ import {
   bulkUpdateSeatType,
   createSeatsInSectionBulk,
   updateSeat,
+  bulkUpdateSeatPositions,
+  bulkDeleteSeats,
   getRowMetrics,
   getVenueSummary,
   getVenueSummaryBreakdown,
@@ -73,6 +75,7 @@ type Tool =
   | 'draw-zone'
   | 'seat-place'
   | 'seat-line'
+  | 'seat-grid'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -110,6 +113,16 @@ function App() {
   const [draftZonePts, setDraftZonePts] = useState<Pt[]>([])
   const [draftSeatPath, setDraftSeatPath] = useState<Pt[]>([])
   const [draftSeatDots, setDraftSeatDots] = useState<Pt[]>([])
+
+  const [seatGridSelecting, setSeatGridSelecting] = useState(false)
+  const [seatGridStart, setSeatGridStart] = useState<Pt | null>(null)
+  const [seatGridEnd, setSeatGridEnd] = useState<Pt | null>(null)
+  const [seatGridModalOpen, setSeatGridModalOpen] = useState(false)
+  const [seatGridRows, setSeatGridRows] = useState(10)
+  const [seatGridCols, setSeatGridCols] = useState(10)
+  const [seatGridSeatType, setSeatGridSeatType] = useState<SeatType>('standard')
+  const [seatGridSeatStart, setSeatGridSeatStart] = useState(1)
+  const [seatGridEnforceInside, setSeatGridEnforceInside] = useState(true)
 
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [gridStep, setGridStep] = useState(0.1)
@@ -535,6 +548,7 @@ function App() {
   }, [tool, draftZonePolyPts, draftZoneIntersection])
 
   const overrideBySeatId = useMemo(() => new Map(overrides.map((o) => [o.seat_id as Id, o])), [overrides])
+  const seatById = useMemo(() => new Map(seats.map((s) => [s.id as Id, s])), [seats])
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id as Id, r])), [rows])
   const sectionById = useMemo(() => new Map(sections.map((s) => [s.id as Id, s])), [sections])
   const levelById = useMemo(() => new Map(levels.map((l) => [l.id as Id, l])), [levels])
@@ -1045,10 +1059,18 @@ function App() {
 
   function onMouseDown(e: any) {
     if (!venueId) return
-    if (!configId) return
-    if (!isPaintTool(tool)) return
     const stage = e.target.getStage()
     const p = stageToWorld(stage)
+
+    if (tool === 'seat-grid') {
+      setSeatGridSelecting(true)
+      setSeatGridStart(p)
+      setSeatGridEnd(p)
+      return
+    }
+
+    if (!configId) return
+    if (!isPaintTool(tool)) return
     setSelecting(true)
     setSelStart(p)
     setSelEnd(p)
@@ -1059,11 +1081,22 @@ function App() {
     const stage = e.target.getStage()
     const p = stageToWorld(stage)
     setCursorWorld(p)
+    if (seatGridSelecting) setSeatGridEnd(p)
     if (!selecting) return
     setSelEnd(p)
   }
 
   function onMouseUp() {
+    if (seatGridSelecting) {
+      setSeatGridSelecting(false)
+      if (!seatGridStart || !seatGridEnd) return
+      const w = Math.abs(seatGridEnd.x - seatGridStart.x)
+      const h = Math.abs(seatGridEnd.y - seatGridStart.y)
+      if (w < 0.25 && h < 0.25) return
+      setSeatGridModalOpen(true)
+      return
+    }
+
     if (!selecting) return
     setSelecting(false)
     if (!selStart || !selEnd || !configId) return
@@ -1192,6 +1225,62 @@ function App() {
     setDraftZonePts([])
     setDraftSeatPath([])
     setDraftSeatDots([])
+    setSeatGridSelecting(false)
+    setSeatGridStart(null)
+    setSeatGridEnd(null)
+  }
+
+  function gridPoints(a: Pt, b: Pt, rows: number, cols: number): Pt[] {
+    const minX = Math.min(a.x, b.x)
+    const maxX = Math.max(a.x, b.x)
+    const minY = Math.min(a.y, b.y)
+    const maxY = Math.max(a.y, b.y)
+    const r = Math.max(1, Math.floor(rows))
+    const c = Math.max(1, Math.floor(cols))
+    const pts: Pt[] = []
+    for (let iy = 0; iy < r; iy++) {
+      const ty = r === 1 ? 0.5 : iy / (r - 1)
+      const y = minY + (maxY - minY) * ty
+      for (let ix = 0; ix < c; ix++) {
+        const tx = c === 1 ? 0.5 : ix / (c - 1)
+        const x = minX + (maxX - minX) * tx
+        pts.push({ x, y })
+      }
+    }
+    return pts
+  }
+
+  useEffect(() => {
+    if (!seatGridModalOpen) return
+    if (!seatGridStart || !seatGridEnd) return
+    const pts = gridPoints(seatGridStart, seatGridEnd, seatGridRows, seatGridCols)
+    setDraftSeatDots(pts)
+    return () => setDraftSeatDots([])
+  }, [seatGridModalOpen, seatGridStart, seatGridEnd, seatGridRows, seatGridCols])
+
+  function commitSeatGrid() {
+    if (!activeSectionId) return
+    if (!seatGridStart || !seatGridEnd) return
+    const pts = gridPoints(seatGridStart, seatGridEnd, seatGridRows, seatGridCols)
+    createSeatsInSectionBulk(activeSectionId, {
+      seat_number_start: seatGridSeatStart,
+      enforce_inside: seatGridEnforceInside,
+      items: pts.map((p, i) => ({
+        x_m: p.x,
+        y_m: p.y,
+        seat_type: seatGridSeatType,
+        seat_number: seatGridSeatStart + i,
+      })),
+    })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+        setSeatGridModalOpen(false)
+        setSeatGridStart(null)
+        setSeatGridEnd(null)
+        setDraftSeatDots([])
+        notifications.show({ message: 'Seat grid created' })
+      })
+      .catch((err) => notifications.show({ color: 'red', message: String(err) }))
   }
 
   function pointsAlongLine(a: Pt, b: Pt, count: number): Pt[] {
@@ -1512,6 +1601,23 @@ function App() {
 
       // Delete selected object (when not typing)
       if (!isTyping && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (selectedSeatIds.size > 0) {
+          e.preventDefault()
+          const ids = Array.from(selectedSeatIds)
+          modals.openConfirmModal({
+            title: `Delete ${ids.length} seat(s)?`,
+            children: <Text size="sm" c="dimmed">This will permanently delete the selected seats.</Text>,
+            labels: { confirm: 'Delete seats', cancel: 'Cancel' },
+            confirmProps: { color: 'red' },
+            onConfirm: async () => {
+              await bulkDeleteSeats({ seat_ids: ids })
+              await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+              setSelectedSeatIds(new Set())
+              notifications.show({ message: 'Seats deleted' })
+            },
+          })
+          return
+        }
         // Prefer the most specific selection first.
         if (selectedZoneId) {
           e.preventDefault()
@@ -1638,7 +1744,7 @@ function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections, pitchPoints, stageW, stageH, tool, draftPts, draftRowPts, draftArcPts, draftZonePts, paintUndo, paintRedo])
+  }, [sections, pitchPoints, stageW, stageH, tool, draftPts, draftRowPts, draftArcPts, draftZonePts, draftSeatPath, selectedSeatIds, paintUndo, paintRedo])
 
   function getSeatStatus(seatId: Id): OverrideStatus {
     const o = overrideBySeatId.get(seatId)
@@ -2123,6 +2229,29 @@ function App() {
             seatDragEnabled={tool === 'seat-move'}
             onSeatDragEnd={(seatId, x, y) => {
               const sp = snap({ x, y })
+              const dragged = seatById.get(seatId) as any
+              const old = dragged ? { x: Number(dragged.x_m), y: Number(dragged.y_m) } : null
+
+              // Multi-seat move: if the dragged seat is in selection, translate all selected.
+              if (selectedSeatIds.has(seatId) && selectedSeatIds.size > 1 && old) {
+                const dx = sp.x - old.x
+                const dy = sp.y - old.y
+                const items = Array.from(selectedSeatIds)
+                  .map((id) => {
+                    const s = seatById.get(id) as any
+                    if (!s) return null
+                    const np = snap({ x: Number(s.x_m) + dx, y: Number(s.y_m) + dy })
+                    return { seat_id: id, x_m: np.x, y_m: np.y }
+                  })
+                  .filter(Boolean) as Array<{ seat_id: Id; x_m: number; y_m: number }>
+
+                bulkUpdateSeatPositions({ items })
+                  .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
+                  .catch((err) => notifications.show({ color: 'red', message: String(err) }))
+                return
+              }
+
+              // Single seat move
               updateSeat(seatId, { x_m: sp.x, y_m: sp.y })
                 .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
                 .catch((err) => notifications.show({ color: 'red', message: String(err) }))
@@ -2159,6 +2288,9 @@ function App() {
             selecting={selecting}
             selStart={selStart}
             selEnd={selEnd}
+            seatGridSelecting={seatGridSelecting}
+            seatGridStart={seatGridStart}
+            seatGridEnd={seatGridEnd}
             activeSectionPoints={activeSectionPoints}
             onDragSectionPoint={(idx, x, y) => {
               const sp = snap({ x, y })
@@ -2300,6 +2432,49 @@ function App() {
               Cancel
             </Button>
             <Button onClick={commitSeatDesign}>Create seats</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={seatGridModalOpen} onClose={() => setSeatGridModalOpen(false)} title="Seat grid (rows × columns)">
+        <Stack>
+          <Text size="sm" c="dimmed">
+            Drag a rectangle on the canvas, then set rows/columns. Seats are created as dots; use “Seat: drag/move” to fine-tune.
+          </Text>
+          <Group grow>
+            <NumberInput label="Rows" value={seatGridRows} onChange={(v) => setSeatGridRows(Math.max(1, Number(v ?? 10)))} min={1} />
+            <NumberInput label="Columns" value={seatGridCols} onChange={(v) => setSeatGridCols(Math.max(1, Number(v ?? 10)))} min={1} />
+          </Group>
+          <Select
+            label="Seat type"
+            value={seatGridSeatType}
+            onChange={(v) => setSeatGridSeatType(((v as SeatType) ?? 'standard') as SeatType)}
+            data={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'aisle', label: 'Aisle' },
+              { value: 'wheelchair', label: 'Wheelchair' },
+              { value: 'companion', label: 'Companion' },
+              { value: 'rail', label: 'Rail' },
+              { value: 'standing', label: 'Standing' },
+            ]}
+          />
+          <NumberInput label="Seat number start" value={seatGridSeatStart} onChange={(v) => setSeatGridSeatStart(Math.max(1, Number(v ?? 1)))} min={1} />
+          <Switch label="Enforce inside section polygon" checked={seatGridEnforceInside} onChange={(e) => setSeatGridEnforceInside(e.currentTarget.checked)} />
+          <Group grow>
+            <Button
+              variant="light"
+              onClick={() => {
+                setSeatGridModalOpen(false)
+                setSeatGridStart(null)
+                setSeatGridEnd(null)
+                setDraftSeatDots([])
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={commitSeatGrid} disabled={!activeSectionId}>
+              Create grid
+            </Button>
           </Group>
         </Stack>
       </Modal>

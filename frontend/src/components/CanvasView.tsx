@@ -104,6 +104,11 @@ export function CanvasView(props: {
   selStart: { x: number; y: number } | null
   selEnd: { x: number; y: number } | null
 
+  // seat grid drag rectangle
+  seatGridSelecting: boolean
+  seatGridStart: { x: number; y: number } | null
+  seatGridEnd: { x: number; y: number } | null
+
   // selection toolbar
   showSelectionToolbar: boolean
   selectedSeatsCount: number
@@ -478,6 +483,18 @@ export function CanvasView(props: {
               height={Math.abs(props.selEnd.y - props.selStart.y)}
               stroke="#a78bfa"
               strokeWidth={0.05}
+            />
+          )}
+
+          {props.seatGridSelecting && props.seatGridStart && props.seatGridEnd && (
+            <Rect
+              x={Math.min(props.seatGridStart.x, props.seatGridEnd.x)}
+              y={Math.min(props.seatGridStart.y, props.seatGridEnd.y)}
+              width={Math.abs(props.seatGridEnd.x - props.seatGridStart.x)}
+              height={Math.abs(props.seatGridEnd.y - props.seatGridStart.y)}
+              stroke="rgba(226,232,240,0.9)"
+              strokeWidth={0.06}
+              dash={[0.25, 0.2]}
             />
           )}
         </Layer>

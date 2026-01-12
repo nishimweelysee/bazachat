@@ -3,6 +3,7 @@ import {
   IconBrush,
   IconCircle,
   IconDots,
+  IconGridDots,
   IconHandMove,
   IconLine,
   IconPolygon,
@@ -21,6 +22,7 @@ type Tool =
   | 'draw-zone'
   | 'seat-place'
   | 'seat-line'
+  | 'seat-grid'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -45,6 +47,8 @@ function toolIcon(tool: Tool) {
       return <IconDots size={18} />
     case 'seat-line':
       return <IconLine size={18} />
+    case 'seat-grid':
+      return <IconGridDots size={18} />
     case 'seat-poly':
       return <IconRoute size={18} />
     case 'seat-move':
@@ -72,6 +76,7 @@ export function ToolPalette(props: {
     { tool: 'draw-zone', label: 'Draw standing zone' },
     { tool: 'seat-place', label: 'Seat: place dots' },
     { tool: 'seat-line', label: 'Seat: line / column' },
+    { tool: 'seat-grid', label: 'Seat: grid (drag rectangle)' },
     { tool: 'seat-poly', label: 'Seat: any shape (polyline)' },
     { tool: 'seat-move', label: 'Seat: drag/move' },
     { tool: 'paint-blocked', label: 'Paint: blocked' },
