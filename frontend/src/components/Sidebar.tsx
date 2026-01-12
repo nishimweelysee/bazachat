@@ -54,6 +54,9 @@ export function Sidebar(props: {
   hasPitch: boolean
   canDuplicateSelected: boolean
   onDuplicateSelected: () => void
+  sectionPreview: boolean
+  setSectionPreview: (v: boolean) => void
+  onFocusSection: () => void
 
   // selection actions
   selectedSeatCount: number
@@ -118,6 +121,17 @@ export function Sidebar(props: {
             disabled={!props.activeLevelId}
           />
         </Tooltip>
+
+        <Group grow>
+          <Tooltip label="Zoom + focus on active section">
+            <Button variant="light" disabled={!props.activeSectionId} onClick={props.onFocusSection}>
+              Focus section
+            </Button>
+          </Tooltip>
+          <Tooltip label="When enabled, only show the active section for easier seat work">
+            <Switch label="Section preview" checked={props.sectionPreview} onChange={(e) => props.setSectionPreview(e.currentTarget.checked)} />
+          </Tooltip>
+        </Group>
 
         <Tooltip label="Choose the row to generate seats or add gaps">
           <Select

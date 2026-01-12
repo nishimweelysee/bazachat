@@ -106,6 +106,7 @@ function App() {
   const [activeLevelId, setActiveLevelId] = useState<Id | null>(null)
   const [activeSectionId, setActiveSectionId] = useState<Id | null>(null)
   const [activeRowId, setActiveRowId] = useState<Id | null>(null)
+  const [sectionPreview, setSectionPreview] = useState(false)
 
   const [tool, setTool] = useState<Tool>('select')
   const [draftPts, setDraftPts] = useState<Pt[]>([])
@@ -524,6 +525,25 @@ function App() {
   const zones = useMemo(() => (data?.zones ?? []) as any[], [data])
   const overrides = useMemo(() => (data?.overrides ?? []) as any[], [data])
 
+  const viewSectionId = sectionPreview ? activeSectionId : null
+  const viewSections = useMemo(() => {
+    if (!viewSectionId) return sections
+    return sections.filter((s: any) => (s.id as Id) === viewSectionId)
+  }, [sections, viewSectionId])
+  const viewZones = useMemo(() => {
+    if (!viewSectionId) return zones
+    return zones.filter((z: any) => (z.section_id as Id) === viewSectionId)
+  }, [zones, viewSectionId])
+  const viewRows = useMemo(() => {
+    if (!viewSectionId) return rows
+    return rows.filter((r: any) => (r.section_id as Id) === viewSectionId)
+  }, [rows, viewSectionId])
+  const viewRowIdSet = useMemo(() => new Set(viewRows.map((r: any) => r.id as Id)), [viewRows])
+  const viewSeats = useMemo(() => {
+    if (!viewSectionId) return seats
+    return seats.filter((s: any) => viewRowIdSet.has(s.row_id as Id))
+  }, [seats, viewSectionId, viewRowIdSet])
+
   const pitchPoints = useMemo(() => {
     const g = data?.pitch?.geom_json as string | undefined
     if (!g) return null
@@ -742,6 +762,13 @@ function App() {
       // ignore
     }
   }
+
+  useEffect(() => {
+    if (!sectionPreview) return
+    if (!activeSectionId) return
+    zoomToSection(activeSectionId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionPreview, activeSectionId])
 
   function zoomToLevel(levelId: Id) {
     const secs = sections.filter((s) => (s.level_id as Id) === levelId)
@@ -1988,6 +2015,12 @@ function App() {
           setActiveLevelId={setActiveLevelId}
           setActiveSectionId={setActiveSectionId}
           setActiveRowId={setActiveRowId}
+          sectionPreview={sectionPreview}
+          setSectionPreview={setSectionPreview}
+          onFocusSection={() => {
+            if (!activeSectionId) return
+            zoomToSection(activeSectionId)
+          }}
           tool={tool}
           setTool={(t) => {
             if (t === 'draw-section') setDraftPts([])
@@ -2376,10 +2409,10 @@ function App() {
                 .then(() => qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] }))
                 .catch((err) => notifications.show({ color: 'red', message: String(err) }))
             }}
-            sections={sections}
-            zones={zones}
-            rows={rows}
-            seats={seats}
+            sections={viewSections}
+            zones={viewZones}
+            rows={viewRows}
+            seats={viewSeats}
             activeSectionId={activeSectionId}
             activeRowId={activeRowId}
             selectedZoneId={selectedZoneId}
@@ -2389,6 +2422,7 @@ function App() {
             onSelectSection={(lvlId, secId) => {
               setActiveLevelId(lvlId)
               setActiveSectionId(secId)
+              if (sectionPreview) zoomToSection(secId)
             }}
             onSelectZone={(zid) => {
               setSelectedZoneId(zid)
