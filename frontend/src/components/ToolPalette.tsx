@@ -23,6 +23,7 @@ type Tool =
   | 'seat-place'
   | 'seat-line'
   | 'seat-grid'
+  | 'seat-fill'
   | 'seat-poly'
   | 'seat-move'
   | 'paint-blocked'
@@ -49,6 +50,8 @@ function toolIcon(tool: Tool) {
       return <IconLine size={18} />
     case 'seat-grid':
       return <IconGridDots size={18} />
+    case 'seat-fill':
+      return <IconPolygon size={18} />
     case 'seat-poly':
       return <IconRoute size={18} />
     case 'seat-move':
@@ -77,6 +80,7 @@ export function ToolPalette(props: {
     { tool: 'seat-place', label: 'Seat: place dots' },
     { tool: 'seat-line', label: 'Seat: line / column' },
     { tool: 'seat-grid', label: 'Seat: grid (drag rectangle)' },
+    { tool: 'seat-fill', label: 'Seat: fill shape (polygon)' },
     { tool: 'seat-poly', label: 'Seat: any shape (polyline)' },
     { tool: 'seat-move', label: 'Seat: drag/move' },
     { tool: 'paint-blocked', label: 'Paint: blocked' },
