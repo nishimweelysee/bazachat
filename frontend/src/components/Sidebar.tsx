@@ -42,6 +42,7 @@ export function Sidebar(props: {
 
   onAddLevel: () => void
   onGenerateSeats: () => void
+  onGenerateSeatsInSection: () => void
   onDeleteActiveRow: () => void
   onDeleteActiveSection: () => void
   onDeleteActiveLevel: () => void
@@ -56,6 +57,9 @@ export function Sidebar(props: {
   onKillSelected: () => void
   onClearSelected: () => void
   onClearSelection: () => void
+  bulkSeatType: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
+  setBulkSeatType: (v: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail') => void
+  onApplySeatTypeToSelected: () => void
 
   // gaps UI
   rowLengthText: string
@@ -124,6 +128,12 @@ export function Sidebar(props: {
         <Tooltip label="Generate seats along the active row">
           <Button variant="light" disabled={!props.activeRowId} onClick={props.onGenerateSeats}>
             Generate seats
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Generate seats by filling the active section polygon (grid)">
+          <Button variant="light" disabled={!props.activeSectionId} onClick={props.onGenerateSeatsInSection}>
+            Generate seats in section
           </Button>
         </Tooltip>
 
@@ -220,6 +230,25 @@ export function Sidebar(props: {
         <Text size="sm" c="dimmed">
           Selected: {props.selectedSeatCount}
         </Text>
+
+        <Select
+          label="Seat type (for selected seats)"
+          value={props.bulkSeatType}
+          onChange={(v) => props.setBulkSeatType(((v as any) ?? 'standard') as any)}
+          data={[
+            { value: 'standard', label: 'Standard' },
+            { value: 'aisle', label: 'Aisle' },
+            { value: 'wheelchair', label: 'Wheelchair' },
+            { value: 'companion', label: 'Companion' },
+            { value: 'rail', label: 'Rail' },
+            { value: 'standing', label: 'Standing' },
+          ]}
+        />
+        <Tooltip label="Apply the selected seat type to the current seat selection">
+          <Button variant="light" disabled={props.selectedSeatCount === 0} onClick={props.onApplySeatTypeToSelected}>
+            Apply seat type
+          </Button>
+        </Tooltip>
 
         <Divider />
 

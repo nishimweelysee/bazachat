@@ -123,6 +123,20 @@ class GenerateSeatsRequest(BaseModel):
     overwrite: bool = False
 
 
+class GenerateSectionSeatsRequest(BaseModel):
+    seat_pitch_m: float = Field(gt=0.1, default=0.5)
+    row_pitch_m: float = Field(gt=0.1, default=0.8)
+    margin_m: float = Field(ge=0, default=0.2)
+    seat_number_start: int = Field(ge=1, default=1)
+    seat_type: SeatType = SeatType.standard
+    overwrite: bool = False
+
+
+class SeatTypeBulkUpdate(BaseModel):
+    seat_ids: list[int] = Field(min_length=1)
+    seat_type: SeatType
+
+
 class ConfigCreate(BaseModel):
     name: str
 

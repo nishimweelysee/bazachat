@@ -26,11 +26,13 @@ from .models import CapacityMode, Config, Level, Pitch, Row, Seat, SeatOverride,
 from .schemas import (
     ConfigCreate,
     GenerateSeatsRequest,
+  GenerateSectionSeatsRequest,
     LevelCreate,
     PitchUpsert,
     RowCreate,
     RowMetrics,
     RowUpdate,
+  SeatTypeBulkUpdate,
     SeatOverrideUpsert,
     SeatOverrideBulkUpsert,
     SeatOverrideBatchUpsert,
@@ -299,6 +301,116 @@ def generate_seats(row_id: int, payload: GenerateSeatsRequest, session: Session 
         created += 1
     session.commit()
     return {"created": created}
+
+
+@app.post("/sections/{section_id}/generate-seats")
+def generate_seats_in_section(section_id: int, payload: GenerateSectionSeatsRequest, session: Session = Depends(_session)) -> dict:
+    sec = session.get(Section, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="section not found")
+    level = session.get(Level, sec.level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="level not found")
+    pitch = session.exec(select(Pitch).where(Pitch.venue_id == level.venue_id)).first()
+
+    section_poly = [(float(x), float(y)) for [x, y] in json.loads(sec.geom_json)]
+    xs = [p[0] for p in section_poly]
+    ys = [p[1] for p in section_poly]
+    if not xs or not ys:
+        raise HTTPException(status_code=400, detail="section polygon missing")
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    pitch_centroid = None
+    if pitch:
+        try:
+            pitch_poly = [(float(x), float(y)) for [x, y] in json.loads(pitch.geom_json)]
+            pitch_centroid = polygon_centroid(pitch_poly)
+        except Exception:
+            pitch_centroid = None
+
+    # Overwrite: remove prior auto-generated grid rows (label starts with GRID-)
+    if payload.overwrite:
+        grid_rows = session.exec(select(Row).where(Row.section_id == section_id, Row.label.like("GRID-%"))).all()
+        row_ids = [int(r.id) for r in grid_rows if r.id is not None]
+        if row_ids:
+            _delete_seats_for_row_ids(session, row_ids)
+            session.exec(delete(Row).where(Row.id.in_(row_ids)))
+            session.commit()
+
+    seat_pitch = float(payload.seat_pitch_m)
+    row_pitch = float(payload.row_pitch_m)
+    margin = float(payload.margin_m)
+    start_num = int(payload.seat_number_start)
+
+    rows_created = 0
+    seats_created = 0
+    max_seats = 100_000
+
+    # Iterate horizontal rows (y increases)
+    y = min_y + margin
+    row_idx = 0
+    while y <= (max_y - margin) + 1e-9:
+        pts_in_row: list[tuple[float, float]] = []
+        x = min_x + margin
+        while x <= (max_x - margin) + 1e-9:
+            if polygon_contains_point(section_poly, x, y):
+                pts_in_row.append((x, y))
+            x += seat_pitch
+
+        if pts_in_row:
+            row_idx += 1
+            label = f"GRID-{row_idx}"
+            order_index = 1000 + row_idx
+            # Simple geometry line for visualization/selection; seats are filtered by polygon anyway.
+            path = {"segments": [{"type": "line", "x1": min_x, "y1": y, "x2": max_x, "y2": y}], "gaps": []}
+            r = Row(section_id=section_id, label=label, order_index=order_index, geom_json=json.dumps(path))
+            session.add(r)
+            session.commit()
+            session.refresh(r)
+            rows_created += 1
+
+            seat_num = start_num
+            for (sx, sy) in pts_in_row:
+                if seats_created >= max_seats:
+                    raise HTTPException(status_code=400, detail=f"too many seats (>{max_seats}); increase pitch/margins")
+                facing = 0.0
+                if pitch_centroid is not None:
+                    facing = angle_deg(sx, sy, pitch_centroid[0], pitch_centroid[1])
+                session.add(
+                    Seat(
+                        row_id=int(r.id),
+                        seat_number=seat_num,
+                        x_m=float(sx),
+                        y_m=float(sy),
+                        z_m=0.0,
+                        facing_deg=float(facing),
+                        seat_type=payload.seat_type,
+                    )
+                )
+                seat_num += 1
+                seats_created += 1
+        y += row_pitch
+
+    session.commit()
+    return {"rows_created": rows_created, "seats_created": seats_created}
+
+
+@app.put("/seats/types/bulk")
+def bulk_update_seat_type(payload: SeatTypeBulkUpdate, session: Session = Depends(_session)) -> dict:
+    seat_ids = sorted(set(int(x) for x in payload.seat_ids))
+    seats = session.exec(select(Seat).where(Seat.id.in_(seat_ids))).all()
+    found = {int(s.id) for s in seats if s.id is not None}
+    missing = [sid for sid in seat_ids if sid not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail={"message": "some seats not found", "missing_seat_ids": missing[:50]})
+    updated = 0
+    for s in seats:
+        s.seat_type = payload.seat_type
+        session.add(s)
+        updated += 1
+    session.commit()
+    return {"updated": updated}
 
 
 @app.post("/venues/{venue_id}/configs")

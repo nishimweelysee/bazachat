@@ -58,7 +58,7 @@ class TestVenueSeatingAPI(unittest.TestCase):
         # Generate seats (should be within section polygon)
         gen = c.post(
             f"/rows/{row_id}/generate-seats",
-            json={"seat_pitch_m": 1.0, "start_offset_m": 0.0, "end_offset_m": 0.0, "seat_number_start": 1, "overwrite": True},
+            json={"seat_pitch_m": 1.0, "start_offset_m": 0.0, "end_offset_m": 0.0, "seat_number_start": 1, "seat_type": "wheelchair", "overwrite": True},
         ).json()
         self.assertGreater(gen["created"], 0)
 
@@ -68,6 +68,25 @@ class TestVenueSeatingAPI(unittest.TestCase):
         snap = c.get(f"/venues/{venue_id}/snapshot?config_id={config_id}").json()
         seats = snap["seats"]
         self.assertGreater(len(seats), 0)
+
+        # Bulk update seat type
+        res2 = c.put("/seats/types/bulk", json={"seat_ids": [seats[0]["id"]], "seat_type": "companion"}).json()
+        self.assertGreaterEqual(res2.get("updated", 0), 1)
+
+        # Section-based seat generation (grid)
+        gen2 = c.post(
+            f"/sections/{section_id}/generate-seats",
+            json={
+                "seat_pitch_m": 1.0,
+                "row_pitch_m": 1.0,
+                "margin_m": 0.5,
+                "seat_number_start": 1,
+                "seat_type": "standard",
+                "overwrite": True,
+            },
+        ).json()
+        self.assertGreaterEqual(gen2.get("rows_created", 0), 1)
+        self.assertGreater(gen2.get("seats_created", 0), 0)
 
         # Bulk block first 2 seats
         seat_ids = [seats[0]["id"], seats[1]["id"]] if len(seats) >= 2 else [seats[0]["id"]]

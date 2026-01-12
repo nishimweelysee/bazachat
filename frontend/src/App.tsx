@@ -32,6 +32,8 @@ import {
   downloadBreakdownCsv,
   exportVenuePackage,
   generateSeats,
+  generateSeatsInSection,
+  bulkUpdateSeatType,
   getRowMetrics,
   getVenueSummary,
   getVenueSummaryBreakdown,
@@ -70,6 +72,8 @@ type Tool =
   | 'paint-blocked'
   | 'paint-kill'
   | 'paint-sellable'
+
+type SeatType = 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
 
 function App() {
   const qc = useQueryClient()
@@ -160,6 +164,17 @@ function App() {
   const [endOffset, setEndOffset] = useState(0.2)
   const [seatStart, setSeatStart] = useState(1)
   const [overwriteSeats, setOverwriteSeats] = useState(true)
+  const [seatType, setSeatType] = useState<SeatType>('standard')
+
+  const [genSectionSeatsOpen, setGenSectionSeatsOpen] = useState(false)
+  const [sectionSeatPitch, setSectionSeatPitch] = useState(0.5)
+  const [sectionRowPitch, setSectionRowPitch] = useState(0.8)
+  const [sectionMargin, setSectionMargin] = useState(0.2)
+  const [sectionSeatStart, setSectionSeatStart] = useState(1)
+  const [sectionOverwrite, setSectionOverwrite] = useState(true)
+  const [sectionSeatType, setSectionSeatType] = useState<SeatType>('standard')
+
+  const [bulkSeatType, setBulkSeatType] = useState<SeatType>('standard')
 
   const exportM = useMutation({
     mutationFn: () => exportVenuePackage(venueId!, configId),
@@ -342,12 +357,40 @@ function App() {
         start_offset_m: startOffset,
         end_offset_m: endOffset,
         seat_number_start: seatStart,
+        seat_type: seatType,
         overwrite: overwriteSeats,
       }),
     onSuccess: async (r) => {
       await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
       setGenSeatsOpen(false)
       notifications.show({ message: `Created ${r.created} seats` })
+    },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const genSectionSeatsM = useMutation({
+    mutationFn: () =>
+      generateSeatsInSection(activeSectionId!, {
+        seat_pitch_m: sectionSeatPitch,
+        row_pitch_m: sectionRowPitch,
+        margin_m: sectionMargin,
+        seat_number_start: sectionSeatStart,
+        seat_type: sectionSeatType,
+        overwrite: sectionOverwrite,
+      }),
+    onSuccess: async (r) => {
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      setGenSectionSeatsOpen(false)
+      notifications.show({ message: `Created ${r.seats_created} seats across ${r.rows_created} rows` })
+    },
+    onError: (e) => notifications.show({ color: 'red', message: String(e) }),
+  })
+
+  const bulkSeatTypeM = useMutation({
+    mutationFn: (payload: { seat_ids: Id[]; seat_type: SeatType }) => bulkUpdateSeatType(payload),
+    onSuccess: async (r) => {
+      await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
+      notifications.show({ message: `Updated seat type for ${r.updated} seats` })
     },
     onError: (e) => notifications.show({ color: 'red', message: String(e) }),
   })
@@ -445,6 +488,7 @@ function App() {
       id: selectedSeatId,
       code,
       status: o?.status ?? 'sellable',
+      seat_type: s.seat_type as string,
       x: s.x_m,
       y: s.y_m,
       row: r?.label,
@@ -1558,6 +1602,7 @@ function App() {
           setGridStep={setGridStep}
           onAddLevel={() => setCreateLevelOpen(true)}
           onGenerateSeats={() => setGenSeatsOpen(true)}
+          onGenerateSeatsInSection={() => setGenSectionSeatsOpen(true)}
           hasPitch={Boolean(pitchPoints?.length)}
           onDeletePitch={() => {
             if (!venueId) return
@@ -1630,6 +1675,13 @@ function App() {
           onKillSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'kill' })}
           onClearSelected={() => bulkOverrideM.mutate({ seat_ids: Array.from(selectedSeatIds), status: 'sellable' })}
           onClearSelection={() => setSelectedSeatIds(new Set())}
+          bulkSeatType={bulkSeatType}
+          setBulkSeatType={setBulkSeatType}
+          onApplySeatTypeToSelected={() => {
+            const ids = Array.from(selectedSeatIds)
+            if (!ids.length) return
+            bulkSeatTypeM.mutate({ seat_ids: ids, seat_type: bulkSeatType })
+          }}
           rowLengthText={rowMetricsQ.data ? `${rowMetricsQ.data.total_length_m.toFixed(2)} m` : '—'}
           gapStartM={gapStartM}
           setGapStartM={setGapStartM}
@@ -1668,6 +1720,9 @@ function App() {
                 </Text>
                 <Text size="sm" c="dimmed">
                   status: {String(seatInfo.status)}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  type: {String(seatInfo.seat_type)}
                 </Text>
                 <Text size="sm" c="dimmed">
                   x,y: {Number(seatInfo.x).toFixed(2)}, {Number(seatInfo.y).toFixed(2)}
@@ -2153,6 +2208,19 @@ function App() {
           <NumberInput label="Start offset (m)" value={startOffset} onChange={(v) => setStartOffset(Number(v ?? 0.2))} decimalScale={2} />
           <NumberInput label="End offset (m)" value={endOffset} onChange={(v) => setEndOffset(Number(v ?? 0.2))} decimalScale={2} />
           <NumberInput label="Seat number start" value={seatStart} onChange={(v) => setSeatStart(Number(v ?? 1))} />
+          <Select
+            label="Seat type"
+            value={seatType}
+            onChange={(v) => setSeatType(((v as SeatType) ?? 'standard') as SeatType)}
+            data={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'aisle', label: 'Aisle' },
+              { value: 'wheelchair', label: 'Wheelchair' },
+              { value: 'companion', label: 'Companion' },
+              { value: 'rail', label: 'Rail' },
+              { value: 'standing', label: 'Standing' },
+            ]}
+          />
           <Switch
             label="Overwrite existing seats in this row"
             checked={overwriteSeats}
@@ -2162,6 +2230,39 @@ function App() {
           <Text size="sm" c="dimmed">
             Seats are kept only if they fall inside the section polygon (meter-accurate containment).
           </Text>
+        </Stack>
+      </Modal>
+
+      <Modal opened={genSectionSeatsOpen} onClose={() => setGenSectionSeatsOpen(false)} title="Generate seats in section (grid)">
+        <Stack>
+          <Text size="sm" c="dimmed">
+            This fills the active section polygon with an axis-aligned seat grid and creates auto rows named GRID-*.
+          </Text>
+          <NumberInput label="Seat pitch (m) (X spacing)" value={sectionSeatPitch} onChange={(v) => setSectionSeatPitch(Number(v ?? 0.5))} decimalScale={2} />
+          <NumberInput label="Row pitch (m) (Y spacing)" value={sectionRowPitch} onChange={(v) => setSectionRowPitch(Number(v ?? 0.8))} decimalScale={2} />
+          <NumberInput label="Margin from section boundary (m)" value={sectionMargin} onChange={(v) => setSectionMargin(Number(v ?? 0.2))} decimalScale={2} />
+          <NumberInput label="Seat number start (per grid row)" value={sectionSeatStart} onChange={(v) => setSectionSeatStart(Number(v ?? 1))} />
+          <Select
+            label="Seat type"
+            value={sectionSeatType}
+            onChange={(v) => setSectionSeatType(((v as SeatType) ?? 'standard') as SeatType)}
+            data={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'aisle', label: 'Aisle' },
+              { value: 'wheelchair', label: 'Wheelchair' },
+              { value: 'companion', label: 'Companion' },
+              { value: 'rail', label: 'Rail' },
+              { value: 'standing', label: 'Standing' },
+            ]}
+          />
+          <Switch
+            label="Overwrite previous GRID-* rows in this section"
+            checked={sectionOverwrite}
+            onChange={(e) => setSectionOverwrite(e.currentTarget.checked)}
+          />
+          <Button disabled={!activeSectionId} onClick={() => genSectionSeatsM.mutate()}>
+            Generate in section
+          </Button>
         </Stack>
       </Modal>
     </AppShell>

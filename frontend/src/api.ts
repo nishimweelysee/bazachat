@@ -139,10 +139,31 @@ export async function generateSeats(
     start_offset_m: number
     end_offset_m: number
     seat_number_start: number
+    seat_type: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
     overwrite: boolean
   },
 ): Promise<{ created: number }> {
   return await http(`/rows/${rowId}/generate-seats`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function generateSeatsInSection(
+  sectionId: Id,
+  payload: {
+    seat_pitch_m: number
+    row_pitch_m: number
+    margin_m: number
+    seat_number_start: number
+    seat_type: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail'
+    overwrite: boolean
+  },
+): Promise<{ rows_created: number; seats_created: number }> {
+  return await http(`/sections/${sectionId}/generate-seats`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function bulkUpdateSeatType(
+  payload: { seat_ids: Id[]; seat_type: 'standard' | 'aisle' | 'wheelchair' | 'companion' | 'standing' | 'rail' },
+): Promise<{ updated: number }> {
+  return await http(`/seats/types/bulk`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
 export async function createConfig(venueId: Id, payload: { name: string }): Promise<{ id: Id; name: string }> {

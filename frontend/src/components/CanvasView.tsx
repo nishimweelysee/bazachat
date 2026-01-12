@@ -365,16 +365,29 @@ export function CanvasView(props: {
             const seatId = s.id as Id
             const isInActiveRow = props.activeRowId !== null ? s.row_id === props.activeRowId : true
             const isSelected = props.selectedSeatIds.has(seatId)
+            const seatType = String((s as any).seat_type ?? 'standard')
+            const radius =
+              seatType === 'wheelchair' ? 0.26 : seatType === 'companion' ? 0.22 : seatType === 'aisle' ? 0.16 : seatType === 'rail' ? 0.18 : seatType === 'standing' ? 0.14 : 0.18
+            const stroke =
+              seatType === 'wheelchair'
+                ? '#60a5fa'
+                : seatType === 'companion'
+                  ? '#c084fc'
+                  : seatType === 'aisle'
+                    ? '#94a3b8'
+                    : seatType === 'rail'
+                      ? '#f472b6'
+                      : undefined
             return (
               <Circle
                 key={`seat-${seatId}`}
                 x={s.x_m as number}
                 y={s.y_m as number}
-                radius={0.18}
+                radius={radius}
                 fill={props.seatColor(seatId)}
                 opacity={isInActiveRow ? 1 : 0.4}
-                stroke={isSelected ? '#a78bfa' : undefined}
-                strokeWidth={isSelected ? 0.06 : 0}
+                stroke={isSelected ? '#a78bfa' : stroke}
+                strokeWidth={isSelected ? 0.06 : stroke ? 0.05 : 0}
                 onMouseEnter={() => props.onSeatHover(seatId)}
                 onMouseLeave={() => props.onSeatHover(null)}
                 onClick={(e) => {
