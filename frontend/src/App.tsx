@@ -181,6 +181,7 @@ function App() {
   const [sectionSeatStart, setSectionSeatStart] = useState(1)
   const [sectionOverwrite, setSectionOverwrite] = useState(true)
   const [sectionSeatType, setSectionSeatType] = useState<SeatType>('standard')
+  const [sectionMaxSeats, setSectionMaxSeats] = useState(200_000)
 
   const [bulkSeatType, setBulkSeatType] = useState<SeatType>('standard')
 
@@ -424,6 +425,7 @@ function App() {
         seat_number_start: sectionSeatStart,
         seat_type: sectionSeatType,
         overwrite: sectionOverwrite,
+        max_seats: sectionMaxSeats,
       }),
     onSuccess: async (r) => {
       await qc.invalidateQueries({ queryKey: ['snapshot', venueId, configId] })
@@ -1074,6 +1076,17 @@ function App() {
     if (!sec) return null
     return JSON.parse(sec.geom_json as string) as Array<[number, number]>
   }, [activeSectionId, sections])
+
+  const activeSectionArea = useMemo(() => {
+    if (!activeSectionPoints) return null
+    return polygonArea(activeSectionPoints)
+  }, [activeSectionPoints])
+
+  const sectionGridEstimate = useMemo(() => {
+    if (activeSectionArea === null) return null
+    const denom = Math.max(1e-9, sectionSeatPitch * sectionRowPitch)
+    return Math.round(activeSectionArea / denom)
+  }, [activeSectionArea, sectionSeatPitch, sectionRowPitch])
 
   // Editable handles for active row line vertices (only if all segments are line)
   const activeRowLineVertices = useMemo(() => {
@@ -2319,9 +2332,21 @@ function App() {
           <Text size="sm" c="dimmed">
             This fills the active section polygon with an axis-aligned seat grid and creates auto rows named GRID-*.
           </Text>
+          {sectionGridEstimate !== null && (
+            <Text size="sm" c={sectionGridEstimate > sectionMaxSeats ? 'red' : 'dimmed'}>
+              estimate: ~{sectionGridEstimate.toLocaleString()} seats (area-based). Max allowed: {sectionMaxSeats.toLocaleString()}.
+            </Text>
+          )}
           <NumberInput label="Seat pitch (m) (X spacing)" value={sectionSeatPitch} onChange={(v) => setSectionSeatPitch(Number(v ?? 0.5))} decimalScale={2} />
           <NumberInput label="Row pitch (m) (Y spacing)" value={sectionRowPitch} onChange={(v) => setSectionRowPitch(Number(v ?? 0.8))} decimalScale={2} />
           <NumberInput label="Margin from section boundary (m)" value={sectionMargin} onChange={(v) => setSectionMargin(Number(v ?? 0.2))} decimalScale={2} />
+          <NumberInput
+            label="Max seats safety limit"
+            value={sectionMaxSeats}
+            onChange={(v) => setSectionMaxSeats(Math.max(1, Number(v ?? 200_000)))}
+            min={1}
+            max={1_000_000}
+          />
           <NumberInput label="Seat number start (per grid row)" value={sectionSeatStart} onChange={(v) => setSectionSeatStart(Number(v ?? 1))} />
           <Select
             label="Seat type"
